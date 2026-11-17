@@ -9,8 +9,8 @@ Personal Agent puts on the wire, which only the Company it is talking to can see
 
 ## What it does
 
-Twenty three checks over a recorded request log. Twenty one need one Company. Two need
-two Companies, because the rules they test are pairwise: a User ID must differ per Company
+Twenty two checks over a recorded request log. Twenty need one Company. Two need two
+Companies, because the rules they test are pairwise: a User ID must differ per Company
 (spec 5.1) and a delegated key must sign for one User ID only (spec 5.2), so no single
 Company can observe either.
 
@@ -125,7 +125,7 @@ than a citation.
 
 ## Status
 
-Early. Twenty three checks and 72 tests. It has been run against synthetic traffic and against a
+Early. Twenty two checks and 72 tests. It has been run against synthetic traffic and against a
 Company of our own on two public hostnames. It has not yet been run against a third party
 agent, and no verdict about anyone else software has been published from it.
 

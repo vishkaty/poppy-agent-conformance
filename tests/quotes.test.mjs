@@ -83,3 +83,16 @@ test("no two checks enforce the same sentence", () => {
   const dupes = [...seen].filter(([, ids]) => ids.length > 1).map(([, ids]) => ids.join(" and "));
   assert.deepEqual(dupes, [], "checks sharing one sentence");
 });
+
+test("the README states the real number of checks", () => {
+  // A public README that overstates its own coverage is the cheapest possible way to lose
+  // standing, and the count drifted once already: it was written before the number was
+  // verified. The suite owns it now.
+  const readme = readFileSync(join(HERE, "../README.md"), "utf8");
+  const words = { 20: "Twenty", 21: "Twenty one", 22: "Twenty two", 23: "Twenty three", 24: "Twenty four" };
+  const total = CHECKS.length + PAIRWISE.length;
+  assert.ok(readme.includes(`${words[total]} checks over a recorded request log`),
+    `the README does not say "${words[total]} checks over a recorded request log" for ${total} checks`);
+  assert.ok(readme.includes(`${words[CHECKS.length]} need one Company`),
+    `the README does not say "${words[CHECKS.length]} need one Company" for ${CHECKS.length}`);
+});
