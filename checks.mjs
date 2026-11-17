@@ -490,6 +490,24 @@ export const CHECKS = [
       return bad.length ? FAIL("ath did not match the access token on the request", bad.slice(0, 3))
                         : PASS(`ath matched the access token on all ${s.length} request(s)`);
     },
+  },
+  {
+    id: "session.header-single",
+    section: "5.2",
+    quote: "The header holds a JWT that the Personal Agent signs for that one request, with a delegated key that a key from its `jwks_uri` vouches for",
+    // One header, one JWT, one request. Two Poppy-Session headers are joined by Node into
+    // one undecodable string, and left undetected that reads as "no Session header was
+    // sent" on every claim check while session.header-sent passes: a self-contradicting
+    // report that blames the agent for the wrong thing. record.mjs flags it instead.
+    run(log) {
+      const resource = log.filter(r => r.isResource);
+      if (!resource.length) return SKIP("the agent made no request to a resource endpoint");
+      const dupes = resource.filter(r => r.sessionHeaderDuplicated);
+      return dupes.length
+        ? FAIL("a request carried more than one Poppy-Session header, so no single JWT signs it",
+               dupes.slice(0, 3).map(r => `${r.method} ${r.path}`))
+        : PASS(`every one of ${resource.length} resource request(s) carried a single Session header`);
+    },
   }
 ];
 

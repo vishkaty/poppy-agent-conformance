@@ -9,7 +9,7 @@ Personal Agent puts on the wire, which only the Company it is talking to can see
 
 ## What it does
 
-Twenty checks over a recorded request log. Eighteen need one Company. Two need two
+Twenty one checks over a recorded request log. Nineteen need one Company. Two need two
 Companies, because the rules they test are pairwise: a User ID must differ per Company
 (spec 5.1) and a delegated key must sign for one User ID only (spec 5.2), so no single
 Company can observe either.
@@ -79,11 +79,20 @@ A log entry is what the Company saw:
 { host, method, url, path, headers, body, at, isResource }
 ```
 
-`at` is Unix seconds, stamped when the request headers arrived. `url` is absolute and built
-from the configured public origin of the Company, not from the Host header, as the protocol
-guides advise for a deployment behind a proxy. `isResource` says whether the Session header
-was required at all, which spec 5.2 settles from the Company own poppy.json. Get those
-wrong and the verdicts are wrong, so they are documented rather than assumed.
+`record.mjs` builds that entry and is held to the same standard as the checks, because it
+decides which rules apply at all and a mistake in it makes every verdict wrong in a way no
+check can notice.
+
+`at` is Unix seconds, taken when the request headers arrive rather than when the response
+ends, or a long poll on an events route would add its own duration as apparent clock skew.
+`url` is absolute and built from the configured public origin, never from the Host header,
+which is what the protocol guides advise for a deployment behind a proxy and is required
+behind a tunnel, where the origin process sees plain HTTP on a loopback port. `isResource`
+is derived from the Company own poppy.json, exactly as spec 5.2 defines the destinations,
+and never from the host: the same sentence says that "Sharing a hostname with one of these
+URLs doesn't make another URL a Session destination", so a host based rule would fail a
+conforming agent for obeying it. A page on organization.domain is recorded separately,
+because the header is a SHOULD there and its absence can never be a failure.
 
 ## The copy of the specification in spec/
 
@@ -99,7 +108,7 @@ than a citation.
 
 ## Status
 
-Early. Twenty checks and 50 tests. It has been run against synthetic traffic and against a
+Early. Twenty one checks and 62 tests. It has been run against synthetic traffic and against a
 Company of our own on two public hostnames. It has not yet been run against a third party
 agent, and no verdict about anyone else software has been published from it.
 
