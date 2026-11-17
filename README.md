@@ -37,6 +37,27 @@ that is asserted by the suite rather than intended.
 
 A FAIL names the rule, quotes it, and shows the request that decided it.
 
+## The server
+
+`server.mjs` is the Company that records. It serves just enough to be a destination, and
+its job is to miss nothing, because a request it does not record is a request no rule
+examines and that reads as conformance.
+
+So it stamps the arrival time synchronously, before any await and before a byte of body is
+read, which a test proves against a deliberately slow response. It records a request whose
+body never arrives, marked incomplete, rather than losing it. It records a request Node
+refuses before the handler runs, which needs a clientError listener or those requests are
+answered by Node and never seen. It distinguishes a body that was never sent from an empty
+one, keeps a sha256 of the full body when it truncates a large one, and answers 421 to an
+absolute-form target for another authority instead of treating it as a path of its own.
+
+It refuses a configuration that would make the verdicts a statement about our deployment
+rather than about the agent: an origin with a path or a trailing slash, or a listed endpoint
+with a query or fragment. And it reports every listed destination on an origin it does not
+serve, because the specification's own example spreads conversations and an MCP server
+across hosts, and a grader that silently cannot see them would report a partial run as a
+complete one.
+
 ## Running it
 
 ```sh
@@ -125,7 +146,7 @@ than a citation.
 
 ## Status
 
-Early. Twenty two checks and 72 tests. It has been run against synthetic traffic and against a
+Early. Twenty two checks and 83 tests. It has been run against synthetic traffic and against a
 Company of our own on two public hostnames. It has not yet been run against a third party
 agent, and no verdict about anyone else software has been published from it.
 
