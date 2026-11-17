@@ -41,13 +41,25 @@ A FAIL names the rule, quotes it, and shows the request that decided it.
 
 ```sh
 npm install
-npm test
+npm test      # needs Node 22.6 or later, for the type stripping the oracle uses
 ```
 
 The suite proves three things about every check. A conforming agent passes it. One
 deliberate breach fails it. An empty log abstains. The map of breaches is asserted to cover
 every check, so adding a check without a way to fail it breaks the suite instead of quietly
 adding a green light.
+
+It also proves the checks against an implementation we did not write. `reference/jose.ts` is
+the signing code from the authors published kit, vendored with its hash recorded, and the
+suite mints conforming traffic with it and requires every check to pass. If our grader
+failed traffic built by the people who wrote the specification, our grader would be wrong
+and not the traffic. The same tests compare our `ath` and our RFC 7638 thumbprint against
+theirs, value for value, because a grader whose hashing disagrees would fail every
+conforming agent on the key comparison.
+
+That control exists because our own fixture is only our reading of the text. Two
+implementations written from one reading agree with each other and disagree with the
+specification, which is a thing this project has done before.
 
 Grading a log:
 
@@ -87,7 +99,7 @@ than a citation.
 
 ## Status
 
-Early. Twenty checks and 44 tests. It has been run against synthetic traffic and against a
+Early. Twenty checks and 50 tests. It has been run against synthetic traffic and against a
 Company of our own on two public hostnames. It has not yet been run against a third party
 agent, and no verdict about anyone else software has been published from it.
 

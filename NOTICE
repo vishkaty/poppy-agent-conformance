@@ -9,3 +9,10 @@ project under the Apache License, Version 2.0.
 Each page in spec/ was verified against the sha256 value the project publishes for it in
 content/versions/versions.json. spec/PROVENANCE.json records the commit, the hashes and
 the result, so a reader can confirm that the copy is unmodified.
+
+This product also includes a copy of the signing code from the Company implementation kit
+of the same project, in reference/jose.ts, licensed by that project under the Apache
+License, Version 2.0. It is used as a test oracle: the suite mints conforming traffic with
+it and requires every check to pass. reference/PROVENANCE.json records where it came from,
+the sha256 of the kit archive it was taken from, and the sha256 of the file itself, which
+the suite verifies before using it.

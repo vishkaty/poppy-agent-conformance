@@ -1,0 +1,11 @@
+{
+  "comment": "The authors' own signing code, vendored as an ORACLE. Our checks are verified by grading traffic this file produces: if our grader fails traffic built by the people who wrote the specification, our grader is wrong. Apache 2.0, attributed in NOTICE.",
+  "file": "jose.ts",
+  "source": "kit/company/validate/jose.ts in the Personal Agent Protocol implementation kit",
+  "retrieved_from": "https://personalagentprotocol.org/kit/implement-personal-agent-protocol.zip",
+  "retrieved": "2026-11-17",
+  "kit_zip_sha256": "b9941ebea0646a2e774362b6332253a9f7cbbe2fd9d8914b188e09f8d4e418e3",
+  "file_sha256": "4a76ab503cd12b3984e97c990bcf308dd63ca2780eed7b460cae20de790ef3b2",
+  "protocol_version_the_kit_validates": "1.0",
+  "why_vendored": "So the verification is hermetic and anyone can reproduce it. A test that silently skips when the kit is absent would be the vacuous pass this project exists to avoid."
+}

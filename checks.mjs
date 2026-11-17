@@ -409,7 +409,7 @@ export const CHECKS = [
         const ok = verifyCompact(jwt.compact, jwk);
         if (ok === null) { unknown.push(`${r.method} ${r.path}: alg ${JSON.stringify(jwt.header.alg)}`); continue; }
         if (!ok) { bad.push(`${r.method} ${r.path}: the signature does not verify against the delegation's cnf.jwk`); continue; }
-        const thumb = thumbprint(jwk);
+        const thumb = thumbprintOf(jwk);
         if (thumb && jwt.header.kid && jwt.header.kid !== thumb)
           bad.push(`${r.method} ${r.path}: kid is not the delegated key's thumbprint`);
       }
@@ -498,7 +498,7 @@ export const CHECKS = [
 // RFC 7638 thumbprint, computed here rather than with jose so the checks stay synchronous
 // and pure. Comparing JSON.stringify(cnf.jwk) hid a shared key behind member order or an
 // extra `alg` member: measured, the same key with reordered members passed.
-function thumbprint(jwk) {
+export function thumbprintOf(jwk) {
   if (!jwk || typeof jwk !== "object") return null;
   const required = jwk.kty === "EC" ? ["crv", "kty", "x", "y"]
                  : jwk.kty === "RSA" ? ["e", "kty", "n"]
@@ -549,7 +549,7 @@ export const PAIRWISE = [
       const dlgsOf = l => sessionRequests(l).map(x => decodeJwt(x.jwt.header.poppy_dlg)).filter(Boolean);
       const A = dlgsOf(a), B = dlgsOf(b);
       if (!A.length || !B.length) return SKIP("the agent did not send a delegation to both Companies");
-      const keys = ds => new Set(ds.map(d => thumbprint(d.payload?.cnf?.jwk)).filter(Boolean));
+      const keys = ds => new Set(ds.map(d => thumbprintOf(d.payload?.cnf?.jwk)).filter(Boolean));
       const jtis = ds => new Set(ds.map(d => d.payload?.jti).filter(Boolean));
       const kA = keys(A), kB = keys(B);
       if (!kA.size || !kB.size) return SKIP("a delegation carried no usable cnf.jwk, so keys cannot be compared");

@@ -5,9 +5,11 @@
   "type": "module",
   "description": "A Company that grades a Personal Agent against published Personal Agent Protocol 1.0, by recording what the agent puts on the wire and judging it against quoted requirements.",
   "license": "Apache-2.0",
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22.6"
+  },
   "scripts": {
-    "test": "node --test tests/**/*.test.mjs"
+    "test": "node --experimental-strip-types --test \"tests/**/*.test.mjs\""
   },
   "dependencies": {
     "jose": "^6.2.12"
