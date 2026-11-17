@@ -1,0 +1,85 @@
+// A conforming agent's traffic, and one deliberate breach per rule.
+//
+// Hostnames are the reserved example names of RFC 2606, not the hostnames of any real
+// deployment. A public test suite that hardcodes somebody live infrastructure both
+// advertises it and breaks when it moves.
+//
+// Real ES256 keys and real compact JWTs, not hand-built strings. A fixture that could not
+// exist on the wire is the quickest way to write a check that passes on fiction: this
+// project has a recorded case of an SSRF pin that never ran because every fixture used an
+// address literal, and the suite was green throughout.
+import { SignJWT, exportJWK, generateKeyPair, calculateJwkThumbprint } from "jose";
+import { randomUUID, createHash } from "node:crypto";
+
+export const IDENTIFIER = "https://shop.example/poppy";
+export const DOMAIN = "shop.example";
+export const CLIENT_ID = "https://agent.example/agent.json";
+const ORIGIN = "https://shop.example";
+
+export async function agentKeys() {
+  const operator = await generateKeyPair("ES256", { extractable: true });
+  const delegated = await generateKeyPair("ES256", { extractable: true });
+  const jwk = await exportJWK(delegated.publicKey);
+  return { operator, delegated, jwk, thumb: await calculateJwkThumbprint(jwk, "sha256") };
+}
+
+export async function delegation(keys, over = {}) {
+  const iat = over.iat ?? Math.floor(Date.now() / 1000);
+  return new SignJWT({
+    iss: CLIENT_ID, iat, exp: over.exp ?? iat + 3600,
+    jti: randomUUID(), cnf: { jwk: keys.jwk }, ...over.payload,
+  })
+    .setProtectedHeader({ alg: "ES256", typ: over.typ ?? "poppy-delegation+jwt", kid: "k1" })
+    .sign(keys.operator.privateKey);
+}
+
+// One recorded request, conforming unless `over` says otherwise.
+export async function request(keys, over = {}) {
+  const method = over.method ?? "GET";
+  const path = over.path ?? "/poppy/orders";
+  const at = over.at ?? Math.floor(Date.now() / 1000);
+  const dlg = over.dlgCompact ?? await delegation(keys, over.dlg ?? {});
+  const claims = {
+    iss: CLIENT_ID, aud: over.aud ?? IDENTIFIER,
+    sid: over.sid ?? "sid-" + randomUUID(), sub: over.sub ?? "user-" + randomUUID(),
+    htm: over.htm ?? method, htu: over.htu ?? ORIGIN + path,
+    iat: over.iat ?? at, jti: over.jti ?? randomUUID(),
+    ...(over.ath !== undefined ? { ath: over.ath } : {}),
+    ...(over.agent_id !== undefined ? { agent_id: over.agent_id } : {}),
+    ...over.claims,
+  };
+  for (const k of over.drop ?? []) delete claims[k];
+  const jwt = await new SignJWT(claims)
+    .setProtectedHeader({ alg: over.alg ?? "ES256", typ: over.sesTyp ?? "poppy-session+jwt",
+                          kid: keys.thumb, poppy_dlg: over.noDlg ? undefined : dlg })
+    .sign(keys.delegated.privateKey);
+  return {
+    host: DOMAIN, method, path, url: ORIGIN + path, at, isResource: true,
+    headers: {
+      "poppy-session": over.noSession ? undefined : jwt,
+      "poppy-version": over.version === null ? undefined : (over.version ?? "1.0"),
+      ...(over.token ? { authorization: `DPoP ${over.token}` } : {}),
+    },
+    body: over.body ?? "",
+  };
+}
+
+// A short conforming session: three requests, one Session, stable sub.
+export async function conformingLog(keys, over = {}) {
+  const sid = "sid-" + randomUUID(), sub = "user-" + randomUUID();
+  const dlgCompact = await delegation(keys);
+  // One of these carries an access token with a correct `ath`, so the signed-in rules have
+  // something to judge. Without it session.ath is INCONCLUSIVE on the control, and a
+  // control that abstains proves less than one that passes.
+  const token = "tok-" + randomUUID();
+  return Promise.all([
+    request(keys, { ...over, sid, sub, dlgCompact, path: "/poppy/orders" }),
+    request(keys, { ...over, sid, sub, dlgCompact, path: "/poppy/orders/1" }),
+    request(keys, { ...over, sid, sub, dlgCompact, method: "POST", path: "/poppy/conversations" }),
+    request(keys, { ...over, sid, sub, dlgCompact, path: "/poppy/orders/2",
+                    token, ath: createHash("sha256").update(token).digest("base64url") }),
+  ]);
+}
+
+export const ctx = { identifier: IDENTIFIER, domain: DOMAIN };
+export const athOf = t => createHash("sha256").update(t).digest("base64url");

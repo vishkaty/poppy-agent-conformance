@@ -1,0 +1,64 @@
+{
+  "repo": "personal-agent-protocol/personal-agent-protocol",
+  "commit": "a1deeab03c519b0597df4e060fe20bc16d41c31e",
+  "version": "1.0",
+  "published": "2026-11-14",
+  "captured": "2026-11-17T17:55:06.667Z",
+  "verified_against_authors_hashes": true,
+  "pages": {
+    "spec": {
+      "file": "spec.mdx",
+      "bytes": 190853,
+      "sha256": "559a191127cb81d4e77360cd1cfae35233178a89b71b39c0534142a2bab918d6",
+      "expected": "559a191127cb81d4e77360cd1cfae35233178a89b71b39c0534142a2bab918d6"
+    },
+    "extensions": {
+      "file": "extensions.mdx",
+      "bytes": 3474,
+      "sha256": "9551439dbf2eee5809da465d9c084c5f941c76316b076bf1f63fda87abd9d183",
+      "expected": "9551439dbf2eee5809da465d9c084c5f941c76316b076bf1f63fda87abd9d183"
+    },
+    "extensions/browser-control": {
+      "file": "extensions-browser-control.mdx",
+      "bytes": 12897,
+      "sha256": "f6b1c55bffa1684dabd72f7b33306a6b61366d28bb312a4bda77c06a6aa73041",
+      "expected": "f6b1c55bffa1684dabd72f7b33306a6b61366d28bb312a4bda77c06a6aa73041"
+    },
+    "extensions/disclosures": {
+      "file": "extensions-disclosures.mdx",
+      "bytes": 2252,
+      "sha256": "5ef8174b267b84767e081a11d7b3b81cf4fa727eb6ec76464af1c3990729477d",
+      "expected": "5ef8174b267b84767e081a11d7b3b81cf4fa727eb6ec76464af1c3990729477d"
+    },
+    "extensions/links": {
+      "file": "extensions-links.mdx",
+      "bytes": 2431,
+      "sha256": "20c02ca301a5ad9a8df5884081173cca867a3098bf7a8433c0de0a55428907df",
+      "expected": "20c02ca301a5ad9a8df5884081173cca867a3098bf7a8433c0de0a55428907df"
+    },
+    "extensions/mediated-sign-in": {
+      "file": "extensions-mediated-sign-in.mdx",
+      "bytes": 9067,
+      "sha256": "a24d93de91583a77628542d30c66304c91c4a8d3004b577aeca504b5becf69bf",
+      "expected": "a24d93de91583a77628542d30c66304c91c4a8d3004b577aeca504b5becf69bf"
+    },
+    "extensions/operations": {
+      "file": "extensions-operations.mdx",
+      "bytes": 40448,
+      "sha256": "b470288f1ecd74a2e7e2db3eb6b0d73b67b3b235c9e21c1678ff8e5f81fcd896",
+      "expected": "b470288f1ecd74a2e7e2db3eb6b0d73b67b3b235c9e21c1678ff8e5f81fcd896"
+    },
+    "extensions/ucp": {
+      "file": "extensions-ucp.mdx",
+      "bytes": 46310,
+      "sha256": "469df0e54d528dca7c63129d674b1a164403ea7166548e21afbd557806750db5",
+      "expected": "469df0e54d528dca7c63129d674b1a164403ea7166548e21afbd557806750db5"
+    },
+    "guides": {
+      "file": "guides.mdx",
+      "bytes": 97769,
+      "sha256": "cd18b4eaaaa4db5a0865da4f303043f8241309e0547c7074c7b44d7455ff5ee2",
+      "expected": "cd18b4eaaaa4db5a0865da4f303043f8241309e0547c7074c7b44d7455ff5ee2"
+    }
+  }
+}

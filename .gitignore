@@ -1,0 +1,3 @@
+node_modules/
+# captures taken after this release, for comparing a newer version before adopting it
+snapshots/

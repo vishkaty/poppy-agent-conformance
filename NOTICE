@@ -1,0 +1,11 @@
+poppy-agent-conformance
+Copyright 2026 Vishal Katyal
+
+This product includes a copy of the Personal Agent Protocol specification, version 1.0,
+in spec/, retrieved from the repository of the Personal Agent Protocol project at
+https://github.com/personal-agent-protocol/personal-agent-protocol and licensed by that
+project under the Apache License, Version 2.0.
+
+Each page in spec/ was verified against the sha256 value the project publishes for it in
+content/versions/versions.json. spec/PROVENANCE.json records the commit, the hashes and
+the result, so a reader can confirm that the copy is unmodified.
