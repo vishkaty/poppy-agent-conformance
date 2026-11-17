@@ -508,6 +508,24 @@ export const CHECKS = [
                dupes.slice(0, 3).map(r => `${r.method} ${r.path}`))
         : PASS(`every one of ${resource.length} resource request(s) carried a single Session header`);
     },
+  },
+  {
+    id: "session.not-on-documents",
+    section: "5.2",
+    quote: "The Personal Agent MUST NOT send a Company's Session JWT to any other destination, except the website pages below.",
+    // Only possible because the recorder now models the documents 5.2 forbids. Before that
+    // there was no way to say "this URL must not carry it", so this breach could not be
+    // examined at all: an agent sending its Session JWT to poppy.json, an OpenAPI document,
+    // a supported_versions document or the token endpoint was simply never looked at.
+    run(log) {
+      const docs = log.filter(r => r.mustNotCarry);
+      if (!docs.length) return SKIP("the agent fetched no discovery or description document and no OAuth endpoint");
+      const leaked = docs.filter(r => r.sessionHeaderCount > 0);
+      return leaked.length
+        ? FAIL("a Session JWT was sent to a destination 5.2 forbids",
+               leaked.slice(0, 3).map(r => `${r.method} ${r.path} (${r.classifiedAs})`))
+        : PASS(`no Session JWT went to any of the ${docs.length} document or OAuth request(s) seen`);
+    },
   }
 ];
 

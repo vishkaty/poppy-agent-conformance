@@ -1,106 +1,181 @@
 // What the Company saw, recorded so the checks can judge it.
 //
 // This module decides which rules apply to a request, so a mistake here makes every verdict
-// wrong in a way no check can notice. It is separated from the server and kept pure for
-// that reason: the classification is testable against a fixture poppy.json with no network,
-// and `tests/record.test.mjs` asserts every case 5.2 names.
+// wrong in a way no check can notice. Three things follow from that, and each was learned by
+// getting it wrong first:
+//
+//  1. Exclusions are evaluated BEFORE destinations. 5.2 says "Discovery and description
+//     documents and OAuth endpoints don't carry this header", and those documents routinely
+//     share a path prefix with a real destination: the specification's own example puts the
+//     OpenAPI document at the origin root. An earlier version checked destinations first and
+//     classified poppy.json, the OpenAPI document, the token endpoint, the OAuth metadata
+//     and the browser session page as destinations, which would fail a conforming agent for
+//     obeying the sentence above.
+//  2. Destinations are matched by METHOD and TEMPLATE, not by prefix. 5.2 counts "the
+//     request URLs its listed APIs describe", and a prefix cannot express that: it also
+//     matches the description document beside them, and /poppy/api-docs under /poppy/api.
+//  3. Every comparison checks the ORIGIN. A destination configured at another provider,
+//     which the guides describe as a normal layout, otherwise matches our own path.
+//
+// The tests use a deliberately overlapping fixture for this reason. A fixture whose URLs do
+// not collide proves the fixture's geometry and not the rule.
+
+const u = s => { try { return new URL(s); } catch { return null; } };
+const norm = p => (p.replace(/\/+$/, "") || "/");
+export const pathOf = s => { const x = u(s); return x ? norm(x.pathname) : null; };
+const originOf = s => { const x = u(s); return x ? x.origin : null; };
+
+// `{id}` matches exactly one segment, so {endpoint}/{id}/messages cannot match
+// {endpoint}/a/b/messages.
+function matchesTemplate(path, template) {
+  const a = norm(path).split("/"), b = norm(template).split("/");
+  if (a.length !== b.length) return false;
+  return b.every((seg, i) => (seg.startsWith("{") && seg.endsWith("}") ? a[i].length > 0 : seg === a[i]));
+}
 
 // The public URL the agent used, built from the CONFIGURED origin.
 //
-// Never from the Host header. The protocol guides are explicit: "Behind proxies and load
-// balancers, compare htu with the public URL the personal agent used. Build it from your
-// configured public origin, not from the Host header your server receives." Behind a tunnel
-// the origin process sees plain HTTP on a loopback port, so a Host-derived URL would never
-// match a conforming `htu` and every agent would fail for our deployment choice.
+// Never from the Host header. The guides: "Behind proxies and load balancers, compare htu
+// with the public URL the personal agent used. Build it from your configured public origin,
+// not from the Host header your server receives." Behind a tunnel the origin process sees
+// plain HTTP on a loopback port, so a Host-derived URL would never match a conforming htu.
+//
+// An absolute-form target is accepted rather than concatenated: RFC 9112 says "A server MUST
+// accept the absolute-form in requests". Concatenating one produced a url like
+// https://shop.example/https://shop.example/v1/orders, which classified as a website page
+// and then failed htm-htu against an agent that had done nothing wrong.
 export function publicUrl(origin, requestTarget) {
-  return `${String(origin).replace(/\/+$/, "")}${requestTarget.startsWith("/") ? "" : "/"}${requestTarget}`;
+  const t = String(requestTarget ?? "/");
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(t)) {
+    const abs = u(t);
+    if (abs && abs.origin === originOf(origin)) return abs.toString();
+    return t;                       // another authority: recordOf flags it as misdirected
+  }
+  return `${String(origin).replace(/\/+$/, "")}${t.startsWith("/") ? "" : "/"}${t}`;
 }
 
-// A repeated Poppy-Session header. Node joins repeated unknown headers with ", ", giving one
-// undecodable string. Left undetected that reads as "no Session header was sent" on every
-// claim check while session.header-sent passes, which is a self-contradicting report. 5.2
-// defines one header holding one JWT signed for one request, so two is a defect worth
-// naming rather than a parse failure worth hiding.
+// A repeated or undecodable Poppy-Session header.
+//
+// Node joins repeated headers with ", " into one undecodable string, and only set-cookie
+// arrives as an array. The raw value is KEPT: deleting it made session.header-sent report
+// "carried no Session header", which is untrue when two were sent and reproduced the
+// self-contradiction the detection exists to stop.
 export function sessionHeaderOf(headers) {
   const raw = headers?.["poppy-session"];
-  if (raw === undefined) return { value: undefined, duplicated: false };
-  const parts = String(raw).split(/,\s*/).filter(Boolean);
-  if (parts.length > 1) return { value: undefined, duplicated: true, count: parts.length };
-  return { value: String(raw), duplicated: false };
+  if (raw === undefined) return { value: undefined, count: 0, decodable: false };
+  const value = Array.isArray(raw) ? raw.join(", ") : String(raw);
+  const parts = value.split(/,\s*/).filter(Boolean);
+  const count = parts.length;
+  const decodable = count === 1 && parts[0].split(".").length === 3;
+  return { value, count, decodable };
 }
 
-const originOf = u => { try { return new URL(u).origin; } catch { return null; } };
-const pathOf = u => { try { return new URL(u).pathname.replace(/\/+$/, "") || "/"; } catch { return null; } };
+// Documents and endpoints that MUST NOT carry the header (5.2, 3.4). Built from the
+// Company's own document, so it is exact rather than guessed.
+function documents(cfg) {
+  const d = cfg.discovery ?? {};
+  const out = ["/.well-known/poppy.json", "/.well-known/oauth-authorization-server",
+               "/.well-known/oauth-protected-resource"];
+  for (const a of d.apis ?? []) if (a?.type === "openapi" && a.url) out.push(a.url);
+  for (const v of Object.values(d.supported_versions ?? {})) if (v) out.push(v);
+  // A ucp entry's endpoint is a profile document, and its requests follow UCP's bindings
+  // rather than 8.2, so the profile is not an 8.2 route base.
+  for (const p of d.agent?.protocols ?? []) if (p?.type && p.type !== "poppy" && p.endpoint) out.push(p.endpoint);
+  for (const e of cfg.authServerEndpoints ?? []) out.push(e);
+  if (d.web?.browser_session_endpoint) out.push(d.web.browser_session_endpoint);
+  return out;
+}
 
-// Does this URL carry the Session header, per 5.2?
-//
-// "The destinations come from the Company's `poppy.json`: the request URLs its listed APIs
-// describe (section 7), and protocol endpoints listed there or derived as the protocol or
-// extension defines... Sharing a hostname with one of these URLs doesn't make another URL a
-// Session destination... Discovery and description documents and OAuth endpoints don't
-// carry this header."
-//
-// So this is derived from the document, exactly, and never from the host. A host-based
-// heuristic marks poppy.json and the OpenAPI document as resources and fails a conforming
-// agent for obeying the sentence above.
-export function classify(url, cfg) {
-  const d = cfg?.discovery ?? {};
-  const path = pathOf(url), origin = originOf(url);
-  if (!path || origin !== originOf(cfg.origin)) return { isResource: false, isPage: false, why: "another host" };
+export function classify(url, method, cfg) {
+  const x = u(url);
+  const origin = originOf(cfg.origin);
+  if (!x || x.origin !== origin)
+    return { isResource: false, isPage: false, mustNotCarry: false, why: "another host" };
+  const path = norm(x.pathname);
+  const m = String(method ?? "GET").toUpperCase();
+  const samePath = (ref) => originOf(ref) === origin
+    ? (ref.startsWith("/") ? norm(ref) === path : pathOf(ref) === path)
+    : (ref.startsWith("/") ? norm(ref) === path : false);
 
-  // exact endpoints, and the routes derived beneath them
-  const under = (base) => {
-    const b = pathOf(base);
-    return b && (path === b || path.startsWith(b + "/"));
-  };
-  const exact = (base) => pathOf(base) === path;
-
-  for (const p of d.agent?.protocols ?? [])
-    if (p?.endpoint && under(p.endpoint)) return { isResource: true, isPage: false, why: "a conversation route under agent.protocols[].endpoint (8.2)" };
-
-  for (const a of d.apis ?? []) {
-    // An `mcp` url IS the server endpoint. An `openapi` url is the DESCRIPTION document,
-    // which 5.2 excludes; the request URLs it describes are covered by apiPrefixes.
-    if (a?.type === "mcp" && a.url && under(a.url)) return { isResource: true, isPage: false, why: "an MCP server listed in apis (section 7)" };
+  // 1. exclusions first, including the well-known prefix for a path-scoped resource metadata
+  for (const ref of documents(cfg)) {
+    const p = ref.startsWith("/") ? norm(ref) : (originOf(ref) === origin ? pathOf(ref) : null);
+    if (p && (p === path || path.startsWith("/.well-known/oauth-protected-resource/")
+                         || path.startsWith("/.well-known/oauth-authorization-server/")))
+      return { isResource: false, isPage: false, mustNotCarry: true,
+               why: "a discovery or description document, or an OAuth endpoint (5.2)" };
   }
-  for (const prefix of cfg.apiPrefixes ?? [])
-    if (path.startsWith(pathOf(prefix) === "/" ? "/" : pathOf(prefix)))
-      return { isResource: true, isPage: false, why: "a request URL a listed OpenAPI describes (section 7)" };
 
-  if (d.web?.browser_session_endpoint && exact(d.web.browser_session_endpoint + "/authorize"))
-    return { isResource: true, isPage: false, why: "browser authorization (section 6)" };
-  if (d.tasks?.endpoint && under(d.tasks.endpoint))
-    return { isResource: true, isPage: false, why: "the tasks endpoint (section 9)" };
-  if (cfg.feedbackEndpoint && under(cfg.feedbackEndpoint))
-    return { isResource: true, isPage: false, why: "the feedback endpoint the tasks response listed (section 9)" };
+  const d = cfg.discovery ?? {};
+  const at = (ref, template, wantMethod) => {
+    if (originOf(ref) !== origin) return false;
+    if (wantMethod && m !== wantMethod) return false;
+    return matchesTemplate(path, pathOf(ref) + template);
+  };
+
+  // 2. the six routes of 8.2, under a `poppy` entry only
+  for (const p of d.agent?.protocols ?? []) {
+    if (p?.type !== "poppy" || !p.endpoint) continue;
+    for (const [wm, t] of [["POST", ""], ["POST", "/{id}/messages"], ["GET", "/{id}/events"],
+                           ["POST", "/{id}/handoff"], ["POST", "/{id}/handoff/cancel"], ["POST", "/{id}/close"]])
+      if (at(p.endpoint, t, wm))
+        return { isResource: true, isPage: false, mustNotCarry: false, why: `a conversation route of 8.2 (${wm} {endpoint}${t})` };
+  }
+
+  // 3. an mcp url IS the endpoint, and nothing beneath it
+  for (const a of d.apis ?? [])
+    if (a?.type === "mcp" && a.url && originOf(a.url) === origin && pathOf(a.url) === path)
+      return { isResource: true, isPage: false, mustNotCarry: false, why: "an MCP server listed in apis (section 7)" };
+
+  // 4. operations a listed OpenAPI describes, compiled to method plus template at startup
+  for (const op of cfg.apiOperations ?? [])
+    if (String(op.method).toUpperCase() === m && matchesTemplate(path, op.template))
+      return { isResource: true, isPage: false, mustNotCarry: false, why: `an operation a listed OpenAPI describes (${op.method} ${op.template})` };
+
+  // 5. the single-request protocol endpoints
+  if (d.web?.browser_session_endpoint && at(d.web.browser_session_endpoint, "/authorize", "POST"))
+    return { isResource: true, isPage: false, mustNotCarry: false, why: "browser authorization (section 6)" };
+  if (d.tasks?.endpoint && at(d.tasks.endpoint, "", "GET"))
+    return { isResource: true, isPage: false, mustNotCarry: false, why: "the tasks endpoint (section 9)" };
+  if (cfg.feedbackEndpoint && at(cfg.feedbackEndpoint, "", "POST"))
+    return { isResource: true, isPage: false, mustNotCarry: false, why: "the feedback endpoint (section 9)" };
   for (const e of cfg.extensionEndpoints ?? [])
-    if (under(e)) return { isResource: true, isPage: false, why: "an extension endpoint (3.3)" };
+    if (samePath(e)) return { isResource: true, isPage: false, mustNotCarry: false, why: "an extension endpoint (3.3)" };
 
-  // Not a destination. A page on organization.domain is a SHOULD, so it is recorded
-  // separately and its missing header can never be a FAIL.
-  const host = (() => { try { return new URL(url).host.toLowerCase(); } catch { return null; } })();
+  // 6. a page of the Company's own website, where 5.2 makes the header a SHOULD. Its absence
+  //    can never be a failure, which is why it is recorded separately.
   const domain = String(d.organization?.domain ?? "").toLowerCase();
-  if (domain && host === domain) return { isResource: false, isPage: true, why: "a website page, where 5.2 makes the header a SHOULD" };
-  return { isResource: false, isPage: false, why: "not a Session destination" };
+  if (domain && x.host.toLowerCase() === domain)
+    return { isResource: false, isPage: true, mustNotCarry: false, why: "a website page, where 5.2 makes the header a SHOULD" };
+  return { isResource: false, isPage: false, mustNotCarry: false, why: "not a Session destination" };
 }
 
-// One record. `at` is Unix SECONDS and is taken now, which the caller must do when the
-// request headers arrive rather than when the response ends: a long poll on
-// `{endpoint}/{id}/events?wait=N` would otherwise add N seconds of apparent clock skew and
-// fail session.iat-window on a conforming agent.
-export function recordOf(req, cfg, body = "") {
-  const url = publicUrl(cfg.origin, req.url ?? "/");
-  const { isResource, isPage, why } = classify(url, cfg);
+// One record. `at` is Unix SECONDS and the caller SHOULD pass the time the request headers
+// arrived: stamping it when the response ends would add a long poll's own duration as
+// apparent clock skew and fail a conforming agent on the iat window.
+//
+// `body` is null when none was sent and "" when an empty one was, because 8.2 requires every
+// POST to carry a JSON body and a later check needs to tell those apart.
+export function recordOf(req, cfg, { at, body = null, bodyComplete = true } = {}) {
+  const target = req.url ?? "/";
+  const url = publicUrl(cfg.origin, target);
+  const misdirected = /^[a-z][a-z0-9+.-]*:\/\//i.test(String(target))
+    && originOf(url) !== originOf(cfg.origin);
+  const method = String(req.method ?? "GET").toUpperCase();
+  const c = misdirected
+    ? { isResource: false, isPage: false, mustNotCarry: false,
+        why: "misdirected: an absolute-form target for another authority (RFC 9112)" }
+    : classify(url, method, cfg);
   const session = sessionHeaderOf(req.headers);
-  const headers = { ...req.headers };
-  if (session.duplicated) delete headers["poppy-session"];
-  else if (session.value !== undefined) headers["poppy-session"] = session.value;
   return {
-    host: (() => { try { return new URL(url).host; } catch { return null; } })(),
-    method: String(req.method ?? "GET").toUpperCase(),
-    url, path: pathOf(url), at: Math.floor(Date.now() / 1000),
-    headers, body,
-    isResource, isPage, classifiedAs: why,
-    sessionHeaderDuplicated: session.duplicated,
+    host: originOf(url) ? new URL(url).host : null,
+    method, url, path: originOf(url) ? norm(new URL(url).pathname) : null,
+    at: at ?? Math.floor(Date.now() / 1000),
+    headers: { ...req.headers }, body, bodyComplete,
+    isResource: c.isResource, isPage: c.isPage, mustNotCarry: c.mustNotCarry,
+    classifiedAs: c.why, misdirected,
+    sessionHeaderCount: session.count,
+    sessionHeaderDecodable: session.decodable,
+    sessionHeaderDuplicated: session.count > 1,
   };
 }

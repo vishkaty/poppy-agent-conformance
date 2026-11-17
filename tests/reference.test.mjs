@@ -42,7 +42,9 @@ async function referenceRequest(ctx, { key, delegation, sid, sub, method = "GET"
     sid, sub, method, url, accessToken: token,
   });
   return {
-    host: ctx.domain, method, path, url, at: ref.nowSeconds(), isResource: true,
+    host: ctx.domain, method, path, url, at: ref.nowSeconds(),
+    isResource: true, isPage: false, mustNotCarry: false,
+    sessionHeaderCount: 1, sessionHeaderDecodable: true, sessionHeaderDuplicated: false,
     headers: { "poppy-session": jwt, "poppy-version": "1.0",
                ...(token ? { authorization: `DPoP ${token}` } : {}) },
     body: "",
@@ -64,6 +66,12 @@ test("traffic built by the authors' own signing code passes every check", async 
   const id = await referenceIdentity(CTX_A);
   const token = ref.randomId(16);
   const log = [
+    // discovery, with no Session header, as 5.2 requires of a conforming agent
+    { host: CTX_A.domain, method: "GET", path: "/.well-known/poppy.json",
+      url: `https://${CTX_A.domain}/.well-known/poppy.json`, at: ref.nowSeconds(),
+      isResource: false, isPage: false, mustNotCarry: true, headers: {}, body: null,
+      classifiedAs: "a discovery document (5.2)", sessionHeaderCount: 0,
+      sessionHeaderDecodable: false, sessionHeaderDuplicated: false },
     await referenceRequest(CTX_A, { ...id }),
     await referenceRequest(CTX_A, { ...id, path: "/poppy/orders/1" }),
     await referenceRequest(CTX_A, { ...id, method: "POST", path: "/poppy/conversations" }),

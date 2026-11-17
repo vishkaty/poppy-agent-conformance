@@ -9,8 +9,8 @@ Personal Agent puts on the wire, which only the Company it is talking to can see
 
 ## What it does
 
-Twenty one checks over a recorded request log. Nineteen need one Company. Two need two
-Companies, because the rules they test are pairwise: a User ID must differ per Company
+Twenty three checks over a recorded request log. Twenty one need one Company. Two need
+two Companies, because the rules they test are pairwise: a User ID must differ per Company
 (spec 5.1) and a delegated key must sign for one User ID only (spec 5.2), so no single
 Company can observe either.
 
@@ -91,8 +91,25 @@ behind a tunnel, where the origin process sees plain HTTP on a loopback port. `i
 is derived from the Company own poppy.json, exactly as spec 5.2 defines the destinations,
 and never from the host: the same sentence says that "Sharing a hostname with one of these
 URLs doesn't make another URL a Session destination", so a host based rule would fail a
-conforming agent for obeying it. A page on organization.domain is recorded separately,
-because the header is a SHOULD there and its absence can never be a failure.
+conforming agent for obeying it.
+
+Three rules follow from that and each was learned by getting it wrong. Exclusions are
+evaluated before destinations, because the documents 5.2 forbids routinely share a path
+prefix with a real one: the specification own example puts the OpenAPI document at the
+origin root. Destinations are matched by method and template rather than by prefix, because
+5.2 counts "the request URLs its listed APIs describe" and a prefix also matches the
+document beside them. Every comparison checks the origin, because a destination hosted at
+another provider is a layout the guides describe and comparing paths alone matched our own.
+
+A page on organization.domain is recorded separately, because the header is a SHOULD there
+and its absence can never be a failure. A document that must not carry the header is
+recorded separately too, so sending a Session JWT to one can be reported at all.
+
+The tests for this use a deliberately overlapping fixture. An earlier fixture put the API
+under a path that collided with nothing, and all of its tests passed while the classifier
+marked poppy.json, the OpenAPI document, the token endpoint, the OAuth metadata and the
+browser session page as Session destinations. Tests whose fixture does not collide prove
+the fixture geometry and not the rule.
 
 ## The copy of the specification in spec/
 
@@ -108,7 +125,7 @@ than a citation.
 
 ## Status
 
-Early. Twenty one checks and 62 tests. It has been run against synthetic traffic and against a
+Early. Twenty three checks and 72 tests. It has been run against synthetic traffic and against a
 Company of our own on two public hostnames. It has not yet been run against a third party
 agent, and no verdict about anyone else software has been published from it.
 

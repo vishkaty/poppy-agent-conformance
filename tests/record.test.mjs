@@ -1,126 +1,198 @@
-// The recorder decides which rules apply at all, so a mistake here makes every verdict
-// wrong in a way no check can detect.
+// The recorder decides which rules apply, so a mistake here makes every verdict wrong in a
+// way no check can notice.
 //
-// Two of these were measured against an earlier recorder in this project's private tree:
-// `at` was milliseconds stamped after the response ended, so every request fell outside the
-// iat window, and `url` was the path only, so the htu comparison silently skipped and a
-// wrong htu passed. The second is the worse one: a check that cannot fail.
+// The fixture is deliberately HOSTILE: the OpenAPI document sits at the origin root, as the
+// specification's own example does, so every forbidden document shares a prefix with a
+// declared destination. An earlier fixture put the API under /poppy/api/, which happened
+// not to overlap anything, and all eleven tests passed while classify() marked
+// poppy.json, the OpenAPI document, the token endpoint, the OAuth metadata and the browser
+// session page as Session destinations. The tests proved the fixture's geometry, not the
+// rule. Measured, all five.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { classify, publicUrl, sessionHeaderOf, recordOf } from "../record.mjs";
 
-// A Company's own poppy.json, which 5.2 makes the authority on what carries the header:
-// "The destinations come from the Company's poppy.json".
+// Overlapping on purpose, and close to the layout in section 3's own example.
 const DISCOVERY = {
   protocol_version: "1.0",
   organization: { name: "Shop", domain: "shop.example" },
   auth: { issuer: "https://shop.example/poppy" },
-  agent: { protocols: [{ type: "poppy", endpoint: "https://shop.example/poppy/conversations", description: "d" }] },
+  supported_versions: { "0.4": "https://shop.example/poppy/0.4.json" },
+  agent: { protocols: [
+    { type: "poppy", endpoint: "https://shop.example/poppy/conversations", description: "d" },
+    // A non-poppy entry. The UCP extension says its endpoint is a PROFILE document and its
+    // requests "follow UCP's Ask bindings and section 4 of this page, not spec 8.2-8.13",
+    // so it is not an 8.2 route base and the profile itself carries no header.
+    { type: "ucp", endpoint: "https://shop.example/.well-known/ucp", description: "d" },
+  ] },
   apis: [
-    { type: "openapi", url: "https://shop.example/poppy/openapi.json", description: "d" },
+    { type: "openapi", url: "https://shop.example/openapi.json", description: "d" },
     { type: "mcp", url: "https://shop.example/poppy/mcp", description: "d" },
   ],
   web: { browser_session_endpoint: "https://shop.example/poppy/browser-session" },
   tasks: { endpoint: "https://shop.example/poppy/tasks" },
 };
-// Request URLs the OpenAPI document describes, resolved from its servers and paths at
-// startup. 5.2 counts "the request URLs its listed APIs describe", which is not the
-// document itself.
-const API_PREFIXES = ["https://shop.example/poppy/api/"];
-const CFG = { origin: "https://shop.example", discovery: DISCOVERY, apiPrefixes: API_PREFIXES };
+const CFG = {
+  origin: "https://shop.example",
+  discovery: DISCOVERY,
+  // The operations the listed OpenAPI describes, compiled at startup from its servers and
+  // paths. Templates, not a prefix: a prefix cannot express "the request URLs its listed
+  // APIs describe" and marks the document beside them.
+  apiOperations: [
+    { method: "GET", template: "/v1/orders" },
+    { method: "GET", template: "/v1/orders/{id}" },
+    { method: "POST", template: "/v1/orders" },
+  ],
+  authServerEndpoints: [
+    "https://shop.example/poppy/token",
+    "https://shop.example/poppy/authorize",
+    "https://shop.example/poppy/revoke",
+  ],
+};
+const R = (u, m = "GET") => classify(u, m, CFG);
+const S = u => "https://shop.example" + u;
 
-const r = u => classify(u, CFG);
-
-test("a listed API's request URLs carry the header", () => {
-  assert.equal(r("https://shop.example/poppy/api/orders").isResource, true);
-  assert.equal(r("https://shop.example/poppy/mcp").isResource, true, "an mcp url IS the endpoint");
+test("the six routes of 8.2 carry the header, with their own methods", () => {
+  for (const [m, u] of [["POST", "/poppy/conversations"],
+                        ["POST", "/poppy/conversations/c_1/messages"],
+                        ["GET",  "/poppy/conversations/c_1/events"],
+                        ["POST", "/poppy/conversations/c_1/handoff"],
+                        ["POST", "/poppy/conversations/c_1/handoff/cancel"],
+                        ["POST", "/poppy/conversations/c_1/close"]])
+    assert.equal(R(S(u), m).isResource, true, `${m} ${u}`);
 });
 
-test("conversation routes under the selected protocol endpoint carry it", () => {
-  // 8.2's routes live beneath agent.protocols[].endpoint.
-  for (const u of ["https://shop.example/poppy/conversations",
-                   "https://shop.example/poppy/conversations/c_1",
-                   "https://shop.example/poppy/conversations/c_1/messages",
-                   "https://shop.example/poppy/conversations/c_1/events"])
-    assert.equal(r(u).isResource, true, u);
+test("a path under the conversation endpoint that 8.2 does not define is not a route", () => {
+  // 1.0 lists six routes and no bare GET {endpoint}/{id}. Accepting anything under the
+  // endpoint invents destinations the specification does not define.
+  assert.equal(R(S("/poppy/conversations/c_1")).isResource, false);
+  assert.equal(R(S("/poppy/conversations/c_1/anything"), "POST").isResource, false);
 });
 
-test("browser authorization carries it, but the page the browser loads does not", () => {
-  // Section 6: the agent authorizes at {browser_session_endpoint}/authorize. The page itself
-  // is loaded by a browser, which never sends the header.
-  assert.equal(r("https://shop.example/poppy/browser-session/authorize").isResource, true);
-  assert.equal(r("https://shop.example/poppy/browser-session").isResource, false);
+test("an operation a listed OpenAPI describes carries it; the document beside it does not", () => {
+  assert.equal(R(S("/v1/orders")).isResource, true);
+  assert.equal(R(S("/v1/orders/o_9")).isResource, true, "a templated id segment");
+  assert.equal(R(S("/openapi.json")).isResource, false, "5.2 excludes description documents");
 });
 
-test("tasks carries it", () => {
-  assert.equal(r("https://shop.example/poppy/tasks").isResource, true);
+test("an operation is a method and a path, not a path alone", () => {
+  assert.equal(R(S("/v1/orders"), "DELETE").isResource, false, "DELETE /v1/orders is not described");
 });
 
-test("discovery, description documents and OAuth endpoints do NOT carry it", () => {
-  // 5.2 verbatim: "Discovery and description documents and OAuth endpoints don't carry this
-  // header." Marking any of these as a resource would fail a conforming agent for obeying
-  // the rule.
-  for (const u of ["https://shop.example/.well-known/poppy.json",
-                   "https://shop.example/.well-known/oauth-authorization-server",
-                   "https://shop.example/.well-known/oauth-protected-resource",
-                   "https://shop.example/poppy/openapi.json",
-                   "https://shop.example/poppy/token",
-                   "https://shop.example/poppy/authorize",
-                   "https://shop.example/poppy/revoke"])
-    assert.equal(r(u).isResource, false, u);
+test("an mcp url is the endpoint itself, and nothing beneath it", () => {
+  assert.equal(R(S("/poppy/mcp"), "POST").isResource, true);
+  assert.equal(R(S("/poppy/mcp/anything"), "POST").isResource, false);
+});
+
+test("browser authorization carries it; the page the browser loads does not", () => {
+  assert.equal(R(S("/poppy/browser-session/authorize"), "POST").isResource, true);
+  assert.equal(R(S("/poppy/browser-session")).isResource, false);
+});
+
+test("tasks is one request, and artifacts under it are documents", () => {
+  // Section 9 defines GET {tasks.endpoint}. 9.4 resolves skill URLs against it, and the
+  // guides say to fetch public documents without the header, so a skill under that path
+  // must not be a destination.
+  assert.equal(R(S("/poppy/tasks")).isResource, true);
+  assert.equal(R(S("/poppy/tasks/skills/manage-bookings/SKILL.md")).isResource, false);
+});
+
+test("every document 5.2 forbids is recorded as such, even sharing a prefix with a destination", () => {
+  // The whole point of the hostile fixture. 5.2: "Discovery and description documents and
+  // OAuth endpoints don't carry this header."
+  for (const u of ["/.well-known/poppy.json", "/openapi.json", "/.well-known/ucp",
+                   "/poppy/0.4.json", "/poppy/token", "/poppy/authorize", "/poppy/revoke",
+                   "/.well-known/oauth-authorization-server", "/.well-known/oauth-protected-resource"]) {
+    const v = R(S(u));
+    assert.equal(v.isResource, false, `${u} was marked a destination`);
+    assert.equal(v.mustNotCarry, true, `${u} was not recorded as a document that must not carry the header`);
+    assert.equal(v.isPage, false, `${u} was recorded as a website page, which 5.2 carves out`);
+  }
+});
+
+test("a non-poppy protocol entry is not an 8.2 route base", () => {
+  const v = R(S("/.well-known/ucp"));
+  assert.equal(v.isResource, false);
+  assert.equal(v.mustNotCarry, true);
 });
 
 test("sharing a hostname does not make a URL a destination", () => {
-  // 5.2 verbatim: "Sharing a hostname with one of these URLs doesn't make another URL a
-  // Session destination." A host-based heuristic would mark all of these.
-  for (const u of ["https://shop.example/anything",
-                   "https://shop.example/poppy/not-listed",
-                   "https://shop.example/poppy/conversationsX"])
-    assert.equal(r(u).isResource, false, u);
+  for (const u of ["/anything", "/poppy/not-listed", "/poppy/conversationsX", "/v1/ordersX"])
+    assert.equal(R(S(u)).isResource, false, u);
 });
 
-test("a website page on organization.domain is a page, not a resource", () => {
-  // 5.2 makes the header a SHOULD there, so its absence can never be a FAIL. Recording it
-  // as a resource would turn a SHOULD into a MUST.
-  const v = r("https://shop.example/products/1");
-  assert.equal(v.isResource, false);
-  assert.equal(v.isPage, true);
+test("a segment boundary is respected", () => {
+  // /poppy/api-docs must not match a destination whose path is /poppy/api.
+  const cfg = { ...CFG, apiOperations: [{ method: "GET", template: "/poppy/api" }] };
+  assert.equal(classify(S("/poppy/api-docs"), "GET", cfg).isResource, false);
+  assert.equal(classify(S("/poppy/api"), "GET", cfg).isResource, true);
 });
 
-test("another host is neither", () => {
-  const v = r("https://elsewhere.example/poppy/api/orders");
-  assert.equal(v.isResource, false);
-  assert.equal(v.isPage, false);
+test("a destination configured on another origin never matches our paths", () => {
+  // The guides' own layout puts a conversation endpoint at another provider. Comparing the
+  // path alone marked our own matching path as that destination.
+  const cfg = { ...CFG, discovery: { ...DISCOVERY,
+    agent: { protocols: [{ type: "poppy", endpoint: "https://chat.provider.example/shops/a/conversations" }] } } };
+  assert.equal(classify(S("/shops/a/conversations"), "POST", cfg).isResource, false);
+});
+
+test("a website page is a page, and another host is neither", () => {
+  const page = R(S("/products/1"));
+  assert.equal(page.isResource, false);
+  assert.equal(page.isPage, true);
+  const other = R("https://elsewhere.example/v1/orders");
+  assert.equal(other.isResource, false);
+  assert.equal(other.isPage, false);
 });
 
 test("the url is built from the configured origin, never from the Host header", () => {
-  // The guides: "Behind proxies and load balancers, compare htu with the public URL the
-  // personal agent used. Build it from your configured public origin, not from the Host
-  // header your server receives." Behind a tunnel the origin sees plain HTTP on a loopback
-  // port, so a Host-derived URL would never match a conforming htu.
-  assert.equal(publicUrl("https://shop.example", "/poppy/api/orders?cursor=1"),
-               "https://shop.example/poppy/api/orders?cursor=1");
-  assert.equal(publicUrl("https://shop.example", "/poppy/api/orders"),
-               "https://shop.example/poppy/api/orders");
+  assert.equal(publicUrl("https://shop.example", "/v1/orders?cursor=1"), "https://shop.example/v1/orders?cursor=1");
 });
 
-test("two Session headers are detected, not silently joined", () => {
-  // Node joins repeated unknown headers with ", ", which produces one undecodable string.
-  // Left alone that reads as "no Session header was sent" on every claim check while
-  // header-sent passes, a self-contradicting report.
+test("an absolute-form target for our own authority is accepted", () => {
+  // RFC 9112: "A server MUST accept the absolute-form in requests". Concatenating it
+  // produced https://shop.example/https://shop.example/v1/orders, which classified as a
+  // page and then failed htm-htu against a conforming agent.
+  assert.equal(publicUrl("https://shop.example", "https://shop.example/v1/orders"), "https://shop.example/v1/orders");
+});
+
+test("an absolute-form target for another authority is recorded, not silently excluded", () => {
+  const rec = recordOf({ method: "GET", url: "https://evil.example/v1/orders", headers: {} }, CFG);
+  assert.equal(rec.misdirected, true, "a request for another authority was not flagged");
+  assert.equal(rec.isResource, false);
+  assert.equal(rec.isPage, false, "and must not be labelled a page of our website");
+});
+
+test("two Session headers are counted, and the value is kept so header-sent stays true", () => {
+  // Deleting the value made session.header-sent say "carried no Session header", which is
+  // untrue when two were sent, and reproduced the self-contradiction it was meant to stop.
   const one = sessionHeaderOf({ "poppy-session": "a.b.c" });
-  assert.deepEqual(one, { value: "a.b.c", duplicated: false });
+  assert.equal(one.count, 1);
   const two = sessionHeaderOf({ "poppy-session": "a.b.c, d.e.f" });
-  assert.equal(two.duplicated, true, "a joined pair of headers was not detected");
-  assert.equal(two.value, undefined, "a duplicated header must not be decoded as if it were one");
+  assert.equal(two.count, 2);
+  assert.ok(two.value, "the raw value must be kept so header-sent does not lie");
+  assert.equal(two.decodable, false);
 });
 
-test("at is Unix seconds, taken when the request arrives", () => {
-  const req = { method: "GET", url: "/poppy/api/orders", headers: { "poppy-version": "1.0" } };
-  const before = Math.floor(Date.now() / 1000);
-  const rec = recordOf(req, CFG);
-  assert.ok(rec.at >= before && rec.at <= before + 2, `at was ${rec.at}, not Unix seconds now`);
-  assert.equal(rec.url, "https://shop.example/poppy/api/orders");
-  assert.equal(rec.isResource, true);
-  assert.equal(rec.method, "GET");
+test("an undecodable single header is recorded as such, not as absent", () => {
+  const rec = recordOf({ method: "GET", url: "/v1/orders", headers: { "poppy-session": "not-a-jwt" } }, CFG);
+  assert.equal(rec.sessionHeaderCount, 1);
+  assert.equal(rec.sessionHeaderDecodable, false);
+});
+
+test("at is Unix seconds, and the caller may supply the arrival time", () => {
+  const at = 1700000000;
+  const rec = recordOf({ method: "GET", url: "/v1/orders", headers: {} }, CFG, { at });
+  assert.equal(rec.at, at, "the server must be able to stamp arrival time, not call time");
+  const now = recordOf({ method: "GET", url: "/v1/orders", headers: {} }, CFG);
+  assert.ok(Math.abs(now.at - Math.floor(Date.now() / 1000)) <= 2);
+});
+
+test("a body that was never sent is distinguished from an empty one", () => {
+  // 8.2: "Every POST has a JSON body with a request id", so a later check needs to tell
+  // "no body" from "empty body". `body ?? ""` hid the difference.
+  const none = recordOf({ method: "GET", url: "/v1/orders", headers: {} }, CFG);
+  assert.equal(none.body, null);
+  const empty = recordOf({ method: "POST", url: "/poppy/conversations", headers: { "content-length": "0" } }, CFG, { body: "" });
+  assert.equal(empty.body, "");
 });

@@ -88,6 +88,14 @@ const BREACH = {
   "delegation.iss-matches": async () =>
     [await f.request(keys, { dlgCompact: await f.delegation(keys, { payload: { iss: "https://other.example/agent.json" } }) })],
   "session.ath": async () => [await f.request(keys, { token: "tok-x", ath: "not-the-hash" })],
+  "session.not-on-documents": async () => {
+    // The agent sending its Session JWT to poppy.json, which 5.2 forbids outright.
+    const r = await f.request(keys, { path: "/.well-known/poppy.json" });
+    r.isResource = false; r.mustNotCarry = true;
+    r.classifiedAs = "a discovery or description document, or an OAuth endpoint (5.2)";
+    r.sessionHeaderCount = 1;
+    return [r];
+  },
   "session.header-single": async () => {
     // What the recorder produces for two Poppy-Session headers: the value removed, because
     // a joined pair is not a JWT, and the duplication flagged so the right rule fails.

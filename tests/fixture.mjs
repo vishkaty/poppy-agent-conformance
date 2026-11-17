@@ -54,7 +54,11 @@ export async function request(keys, over = {}) {
                           kid: keys.thumb, poppy_dlg: over.noDlg ? undefined : dlg })
     .sign(keys.delegated.privateKey);
   return {
-    host: DOMAIN, method, path, url: ORIGIN + path, at, isResource: true,
+    host: DOMAIN, method, path, url: ORIGIN + path, at,
+    // the fields record.mjs produces, so a fixture cannot pass a check by omitting them
+    isResource: true, isPage: false, mustNotCarry: false,
+    sessionHeaderCount: over.noSession ? 0 : 1, sessionHeaderDecodable: !over.noSession,
+    sessionHeaderDuplicated: false,
     headers: {
       "poppy-session": over.noSession ? undefined : jwt,
       "poppy-version": over.version === null ? undefined : (over.version ?? "1.0"),
@@ -72,7 +76,19 @@ export async function conformingLog(keys, over = {}) {
   // something to judge. Without it session.ath is INCONCLUSIVE on the control, and a
   // control that abstains proves less than one that passes.
   const token = "tok-" + randomUUID();
+  // A real conforming agent does discovery first, with NO Session header, so the control
+  // includes it. Without a document fetch session.not-on-documents abstains, and a control
+  // that abstains proves less than one that passes.
+  const discovery = {
+    host: DOMAIN, method: "GET", path: "/.well-known/poppy.json",
+    url: ORIGIN + "/.well-known/poppy.json", at: Math.floor(Date.now() / 1000),
+    isResource: false, isPage: false, mustNotCarry: true,
+    classifiedAs: "a discovery or description document, or an OAuth endpoint (5.2)",
+    headers: {}, body: null, sessionHeaderCount: 0, sessionHeaderDecodable: false,
+    sessionHeaderDuplicated: false,
+  };
   return Promise.all([
+    discovery,
     request(keys, { ...over, sid, sub, dlgCompact, path: "/poppy/orders" }),
     request(keys, { ...over, sid, sub, dlgCompact, path: "/poppy/orders/1" }),
     request(keys, { ...over, sid, sub, dlgCompact, method: "POST", path: "/poppy/conversations" }),
