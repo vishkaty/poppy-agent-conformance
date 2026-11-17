@@ -132,6 +132,29 @@ marked poppy.json, the OpenAPI document, the token endpoint, the OAuth metadata 
 browser session page as Session destinations. Tests whose fixture does not collide prove
 the fixture geometry and not the rule.
 
+## Judged by their code, not only by our reading
+
+`reference/` holds three files from the authors published kit, each with the sha256 of the
+archive it came from and of the file itself, which the suite verifies before using them.
+
+`jose.ts` is their signing code. The suite mints conforming traffic with it and requires
+every check to pass, so if our grader failed traffic built by the people who wrote the
+specification, our grader would be wrong and not the traffic. The same tests compare our
+`ath` and our RFC 7638 thumbprint against theirs, value for value.
+
+`schema.ts` and `poppy.schema.json` are their JSON Schema validator and the schema it
+applies to a `poppy.json`. Our own discovery document is judged by those rather than by our
+reading of section 3.1, and the test proves the check can fail by feeding it the two defects
+that refused an earlier Company of ours whole: an extension declared as an object where 1.0
+wants an array of version entries, and a conversation protocol entry with no description.
+The errors come back in their words, "/extensions/operations must be an array, not an
+object" and "/agent/protocols/0/description is required", which is how we know the check
+being run is theirs.
+
+Writing that control is what caught the argument order. Their signature is
+`validateSchema(schema, value, refs)`, ours was reversed, and validating the schema against
+the document produced no errors and read as a pass.
+
 ## The copy of the specification in spec/
 
 Published 1.0, frozen by the authors on 2026-11-14, captured from their repository at one
@@ -146,7 +169,7 @@ than a citation.
 
 ## Status
 
-Early. Twenty two checks and 83 tests. It has been run against synthetic traffic and against a
+Early. Twenty two checks and 87 tests. It has been run against synthetic traffic and against a
 Company of our own on two public hostnames. It has not yet been run against a third party
 agent, and no verdict about anyone else software has been published from it.
 

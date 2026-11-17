@@ -25,12 +25,16 @@ const CTX_A = { identifier: "https://shop.example/poppy", domain: "shop.example"
 const CTX_B = { identifier: "https://other-shop.example/poppy", domain: "other-shop.example" };
 const CLIENT_ID = "https://agent.example/agent.json";
 
-test("the vendored oracle is the file its provenance claims", () => {
-  // If the oracle is edited, every verdict below becomes a statement about our own edit
+test("every vendored file is the file its provenance claims", () => {
+  // If an oracle is edited, every verdict below becomes a statement about our own edit
   // rather than about the authors' code, and nothing would say so.
   const prov = JSON.parse(readFileSync(join(HERE, "../reference/PROVENANCE.json"), "utf8"));
-  const got = createHash("sha256").update(readFileSync(join(HERE, "../reference/jose.ts"))).digest("hex");
-  assert.equal(got, prov.file_sha256, "reference/jose.ts does not match its recorded hash");
+  assert.ok(Object.keys(prov.files).length >= 3, "the provenance names fewer files than are vendored");
+  for (const [file, rec] of Object.entries(prov.files)) {
+    const got = createHash("sha256").update(readFileSync(join(HERE, "../reference", file))).digest("hex");
+    assert.equal(got, rec.sha256, `reference/${file} does not match its recorded hash`);
+    assert.ok(rec.used_as && rec.source, `reference/${file} does not say where it came from or what it is for`);
+  }
   assert.equal(prov.protocol_version_the_kit_validates, "1.0");
 });
 
