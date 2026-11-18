@@ -398,7 +398,7 @@ export function createRig(cfg = {}) {
       active = run;
       // The budget is per run, which is what its own message claims. Nothing called this, so
       // it was a per-process budget that outsiders could spend and that never reset.
-      for (const g of graders) g.config.issuerKeys?.newRun?.();
+      for (const g of graders) g.issuerKeys?.newRun?.();
       sweep();
       const origins = graders.map(g => g.config.origin);
       return json(res, 201, {
@@ -416,7 +416,7 @@ export function createRig(cfg = {}) {
     // a cached key set verifies this run's delegation against last run's key, and a remembered
     // failure (from a 404 when the identity was not mounted) denies every later lease. Both
     // were measured. So the gate forgets its own issuer before it drives.
-    for (const g of graders) g.config.issuerKeys?.forget?.(g.canaryClientId);
+    for (const g of graders) g.issuerKeys?.forget?.(g.canaryClientId);
 
     const c = collector = { minted: new Set(), logs: [[], []], intended: [0, 0],
                             publicLeg: [], sendError: [], shortfall: [], legs: [] };

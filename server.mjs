@@ -404,6 +404,18 @@ export function createGrader(cfg) {
       // cannot disagree.
       const route = conversationRouteOf(record.url, record.method, config);
       if (route) {
+        // 5.3: "The Company MUST NOT use unverified Session claims to attribute a request to a
+        // Personal Agent, User, or Session, or to look up their state." A conversation belongs
+        // to the client_id and User ID a Session JWT carries (8.2), so a Company configured to
+        // verify must not hold state under claims it could not check. Verification runs only
+        // while a run is open, which is what keeps the outbound fetch from being an open
+        // primitive, so outside a run this Company serves no conversations rather than
+        // attributing them to an unproven client.
+        if (issuerKeys && record.issuerKeys?.outcome !== "ok") {
+          answer(res, record, 400, { error: "invalid_session",
+            error_description: "this Company verifies a delegation against the key the agent publishes before it keeps conversation state (5.3), and it could not verify this one: lease a run first with POST /grader/runs" });
+          return;
+        }
         let body;
         if (record.body !== null && record.body !== "") {
           try { body = JSON.parse(record.body); }
@@ -434,6 +446,11 @@ export function createGrader(cfg) {
   return {
     server, records, warnings,
     get seq() { return seq; },
+    // The resolver this Company actually uses, whether it was injected or built here. Exposed
+    // because the rig has to forget the canary's issuer and reset the budget on the REAL one:
+    // reading it off the config reached only an injected one, so the fix worked in a test that
+    // injected it and did nothing in production, which is how it shipped broken.
+    get issuerKeys() { return issuerKeys; },
     // The two documents the canary's identity is served from, under /canary/. The rig sets
     // them for the duration of a gate run and clears them afterwards.
     setCanaryIdentity(documents) { canaryIdentity = documents; },

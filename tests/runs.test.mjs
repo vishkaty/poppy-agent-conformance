@@ -856,3 +856,23 @@ test("two leases in the same second both succeed, with a key the gate generated 
     }
   } finally { await r.close(); }
 });
+
+test("the rig reaches the resolver a Company actually uses, not one a test injected", async () => {
+  // This is how the fix for the canary-issuer memo shipped broken. The rig called
+  // `g.config.issuerKeys.forget(...)`, which exists only when a test puts the resolver on the
+  // config; in production the grader builds its own and the call did nothing. The suite was
+  // green and three consecutive leases still failed against the live deployment.
+  const r = createRig({ companies: COMPANIES().map(c => ({ ...c, verifyDelegations: true })) });
+  try {
+    await r.listen();
+    for (const g of r.graders) {
+      assert.ok(g.issuerKeys, "a verifying Company does not expose the resolver it uses");
+      assert.equal(typeof g.issuerKeys.forget, "function", "the exposed resolver cannot be forgotten");
+      assert.equal(typeof g.issuerKeys.newRun, "function", "the exposed resolver cannot reset its budget");
+    }
+    // and a Company that does not verify exposes nothing to forget
+    const off = createRig({ companies: COMPANIES() });
+    await off.listen();
+    try { assert.equal(off.graders[0].issuerKeys, null); } finally { await off.close(); }
+  } finally { await r.close(); }
+});

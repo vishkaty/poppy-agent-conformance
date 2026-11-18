@@ -185,6 +185,14 @@ with `verify_delegations`, and the rule abstains as our own limit rather than pa
 when it is off. The gate asserts that abstention rather than ignoring it: a pass with no key set
 would be a statement about nothing.
 
+The connection goes to the address that was checked, by a `lookup` that returns only that
+address, which `node:net` honours. The first version of this passed a `connectTo` option to
+global fetch; Node has no such option and ignores it in silence, so the address was checked and
+the connection was then made by hostname. Its only test asserted that a fake transport had
+recorded the option, so the suite was green over a defence that did not exist. `fetch-pinned.mjs`
+is tested against a generated certificate on a real socket, reaching a hostname that resolves
+nowhere, so it cannot pass unless the pin works.
+
 `addresses.mjs` is the boundary. It is an allowlist, so a range nobody thought of fails closed,
 and it decodes the IPv4 forms hidden inside IPv6 before classifying anything, because
 `::ffff:127.0.0.1` is the bypass a denylist misses. Section 3: "Personal Agents and Companies
@@ -192,6 +200,15 @@ MUST NOT connect to a loopback, private, or link-local address for a URL the oth
 them." Beyond that, and ours rather than the specification's: only port 443, no credentials in
 the URL, no redirects, 100 KB, and the connection is pinned to the address that was checked, so
 DNS cannot answer differently the second time.
+
+Verification runs only while a run is open, or while the gate drives its own control. That
+keeps the outbound fetch from being something anyone who can reach the hostname can aim: it was
+attached to every request carrying a decodable header, and one bare request naming the canary's
+own issuer was enough to make the next lease fail for thirty seconds, measured. It has a
+consequence worth stating: outside a run this Company cannot verify, so it serves no
+conversations there either, because 5.3 forbids attributing state to claims nobody checked and
+a conversation belongs to the `client_id` and User ID a Session JWT carries. Endpoints that use
+no Session claims still answer, which 5.3 permits in as many words.
 
 Whose fault an outcome is comes down to bytes. If a response arrived, it is about the agent,
 because a status code is its own server speaking, and only 404 and 410 are failures: a 401, 403
@@ -521,7 +538,7 @@ than a citation.
 
 Early, and honest about what has been measured.
 
-Twenty seven rules, and eighty nine mutations that each break one guard and require a named test
+Twenty seven rules, and ninety mutations that each break one guard and require a named test
 to notice. The test count is deliberately not quoted here: it went stale twice in one day, and
 `npm test` prints it. It has been run against synthetic traffic, against traffic minted by the
 authors own signing code, and end to end through a tunnel at a real hostname on 443, where a

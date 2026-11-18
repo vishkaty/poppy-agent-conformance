@@ -120,7 +120,7 @@ export const MUTATIONS = [
     find: "      if (issuerKeys && (config.verifyWhen?.() ?? true)) {", to: "      if (issuerKeys) {" },
   { id: "live/canary-issuer-remembered", file: "rig.mjs", tests: "tests/runs.test.mjs",
     kills: "one request cannot deny every later lease",
-    find: "    for (const g of graders) g.config.issuerKeys?.forget?.(g.canaryClientId);", to: "" },
+    find: "    for (const g of graders) g.issuerKeys?.forget?.(g.canaryClientId);", to: "" },
   { id: "live/no-refetch-on-unknown-kid", file: "issuer-keys.mjs", tests: "tests/issuer-keys.test.mjs",
     kills: "refetched once when the kid in front of us is not in it",
     find: "      if (hit && at < hit.expiresAt && !stale)", to: "      if (hit && at < hit.expiresAt)" },
@@ -147,6 +147,10 @@ export const MUTATIONS = [
   { id: "pin/cert-unverified", file: "fetch-pinned.mjs", tests: "tests/fetch-pinned.test.mjs",
     kills: "certificate that does not match the name is refused",
     find: "      rejectUnauthorized: true,", to: "      rejectUnauthorized: false," },
+
+  { id: "live/state-on-unverified-claims", file: "server.mjs", tests: "tests/conversations.test.mjs",
+    kills: "does not keep conversation state for claims it could not verify",
+    find: "        if (issuerKeys && record.issuerKeys?.outcome !== \"ok\") {", to: "        if (false) {" },
 
   // the resolver: what it fetches, what it refuses, and whose fault each outcome is
   { id: "fetch/addresses-unchecked", file: "issuer-keys.mjs", tests: "tests/issuer-keys.test.mjs",

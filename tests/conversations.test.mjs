@@ -355,3 +355,49 @@ test("a Direct Conversation is linked to its parent, and refused in the four way
     assert.equal(afterClose.body.error, "conversation_closed");
   });
 });
+
+test("a Company that verifies does not keep conversation state for claims it could not verify", async () => {
+  // The residual half of the 5.3 breach. Closing the egress hole meant not fetching outside a
+  // run, so outside a run a delegation cannot be verified; and conversation ownership is the
+  // client_id and User ID a Session JWT carries. 5.3: "The Company MUST NOT use unverified
+  // Session claims to attribute a request to a Personal Agent, User, or Session, or to look up
+  // their state." So a Company configured to verify must refuse to create or continue a
+  // conversation when verification did not happen, rather than hold state under a client_id
+  // nobody proved.
+  //
+  // Requests that use no Session claims are unaffected: 5.3 lets an endpoint that uses none
+  // handle a request without verifying one, which is why the API operations still answer.
+  const g = createGrader({ origin: "http://127.0.0.1", discovery: discoveryFor,
+                           operations: [{ method: "GET", path: "/poppy/orders" }],
+                           verifyDelegations: true,
+                           // verification cannot run: this models being outside a lease
+                           verifyWhen: () => false,
+                           issuerKeys: { forIssuer: async () => { throw new Error("must not be called"); },
+                                         newRun() {}, forget() {} } });
+  const port = await g.listen(0);
+  g.setOrigin(`http://127.0.0.1:${port}`);
+  try {
+    const a = await agent(g.config.origin);
+    const made = await a.call("POST", a.endpoint, { id: "r1", message: { text: "hello" } });
+    assert.equal(made.status, 400, `a conversation was created on unverified claims: ${made.text}`);
+    assert.equal(made.body?.error, "invalid_session");
+    assert.match(made.body?.error_description ?? "", /verif/i, made.text);
+
+    // an API operation, which uses no Session claims, still answers
+    const api = await a.call("GET", `${g.config.origin}/poppy/orders`);
+    assert.equal(api.status, 200, `an endpoint using no Session claims was refused: ${api.text}`);
+  } finally { await g.close(); }
+});
+
+test("the same Company serves conversations once verification has run", async () => {
+  // The control, so the rule above cannot be satisfied by refusing conversations always.
+  const g = createGrader({ origin: "http://127.0.0.1", discovery: discoveryFor,
+                           operations: [{ method: "GET", path: "/poppy/orders" }] });
+  const port = await g.listen(0);
+  g.setOrigin(`http://127.0.0.1:${port}`);
+  try {
+    const a = await agent(g.config.origin);
+    const made = await a.call("POST", a.endpoint, { id: "r1", message: { text: "hello" } });
+    assert.equal(made.status, 201, made.text);
+  } finally { await g.close(); }
+});
