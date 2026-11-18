@@ -154,8 +154,39 @@ a test enforces that, so the next check added cannot be quietly forgotten by bot
 
 ```sh
 npm install
+npm start     # two Companies on loopback, prints the origins to point your agent at
 npm test      # needs Node 22.6 or later, for the type stripping the oracle uses
+npm run killtest
 ```
+
+`npm start` prints one parseable line and nothing secret:
+
+```
+ready http://127.0.0.1:53124 http://127.0.0.1:53125 control http://127.0.0.1:53124
+```
+
+For a deployment, pass a config file naming the public origin of each Company and the port
+it binds. The origin is the URL a builder reaches, which is what `htu` is compared against;
+it is never taken from the Host header, because behind a proxy the process sees plain HTTP on
+a loopback port and a Host-derived URL would fail every conforming agent.
+
+```json
+{
+  "lease_seconds": 900,
+  "companies": [
+    { "origin": "https://poppy.example",  "port": 8787, "trust_forwarded_for": true },
+    { "origin": "https://poppy2.example", "port": 8788, "trust_forwarded_for": true }
+  ]
+}
+```
+
+A Company declares its operations once. The OpenAPI document `poppy.json` advertises and the
+classifier that decides where the agent went are both built from that one list, because 5.2
+counts "the request URLs its listed APIs describe" and holding that as two facts lets them
+drift: a path in the document the classifier does not know is a destination an agent is
+invited to call and no rule examines, and the reverse fails an agent for calling exactly what
+it was told to. A test walks the served document and requires every operation in it to
+classify as a destination, with a control so it is not simply passing everything.
 
 The suite proves three things about every check. A conforming agent passes it. One
 deliberate breach fails it. An empty log abstains. The map of breaches is asserted to cover

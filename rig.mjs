@@ -154,6 +154,17 @@ export function createRig(cfg = {}) {
   let granting = false;                   // a second POST while the canary runs gets 409, not a second lease
   let collector = null;                   // set only while the canary drives, see keepFor
   let ports = [];
+  const startedAt = now();
+  // When requests arrived while no run was open. An agent that fetched poppy.json on startup
+  // and cached it did so before the lease, so the rule about documents has nothing to judge
+  // and would otherwise abstain with advice the builder had already followed.
+  const beforeWindow = cfg.beforeLeaseWindowSeconds ?? 600;
+  const arrivals = [[], []];
+  const noteArrival = (i) => {
+    const a = arrivals[i];
+    a.push(now());
+    if (a.length > 500) a.splice(0, a.length - 500);
+  };
 
   const keepFor = i => (record) => {
     // The canary's own traffic, matched by the exact JWT it minted so a stray request from a
@@ -162,6 +173,7 @@ export function createRig(cfg = {}) {
       const raw = record.headers?.["poppy-session"];
       const isDoc = raw === undefined && String(record.path ?? "").startsWith("/.well-known/");
       if (isDoc || collector.minted.has(raw)) collector.logs[i].push(record);
+      else noteArrival(i);               // a stray during the canary belongs to no run either
       return false;
     }
     const run = liveRun();
@@ -173,7 +185,7 @@ export function createRig(cfg = {}) {
     // comparison could never be false: it was a guard no mutation could kill, which is
     // either dead code or an untested check. Attribution happens in sliceOf, where the mark
     // decides which run a retained record belongs to and a test can break it.
-    if (!run) return false;
+    if (!run) { noteArrival(i); return false; }
     if (run.kept[i] >= maxPerCompany) { run.beyondLimit[i]++; return false; }
     run.kept[i]++;
     return true;
@@ -204,6 +216,7 @@ export function createRig(cfg = {}) {
       token: run.token, started: run.started, ended: run.ended, frozen: run.frozen,
       graderCommit, warnings: graders.flatMap(g => g.warnings),
       beyondLimit: run.beyondLimit.reduce((a, b) => a + b, 0),
+      beforeLease: run.beforeLease, beforeLeaseWindowSeconds: beforeWindow,
       companies: sliceOf(run),
     });
   }
@@ -270,9 +283,11 @@ export function createRig(cfg = {}) {
         detail: "Before grading anyone this grader drives itself with the protocol authors' own signing code. That control did not pass, so this deployment is misconfigured and nothing here would be a statement about your agent." });
 
       const token = token22();
+      const since = now() - beforeWindow;
       const run = { token, id: sha(token), started: now(), ended: null, frozen: false,
                     expires: now() + leaseSeconds, marks: graders.map(g => g.seq),
-                    kept: [0, 0], beyondLimit: [0, 0], stored: null, html: null };
+                    kept: [0, 0], beyondLimit: [0, 0], stored: null, html: null,
+                    beforeLease: arrivals.reduce((n, a) => n + a.filter(t => t >= since).length, 0) };
       runs.set(run.id, run);
       active = run;
       sweep();
@@ -347,6 +362,15 @@ export function createRig(cfg = {}) {
     if (path === null || (path !== "/grader" && !path.startsWith(CONTROL_PREFIX))) return false;
     sweep();
     const m = String(req.method ?? "GET").toUpperCase();
+
+    if (path === CONTROL_PREFIX + "health" && (m === "GET" || m === "HEAD")) {
+      // Reports live in memory, so a restart answers every token with the bytes of an
+      // unknown path. This is how a builder tells those apart. It names no token.
+      json(res, 200, { ok: true, started_at: startedAt, grader_commit: graderCommit,
+                       protocol_version: "1.0", lease_held: !!liveRun(),
+                       companies: graders.map(g => g.config.origin) });
+      return true;
+    }
 
     if (path === CONTROL_PREFIX + "runs" && m === "POST") {
       // Never fire and forget. An exception inside the gate used to leave the request with

@@ -44,6 +44,52 @@ export function discoveryFor(origin, { name = "Grader Shop", withExtensions = tr
   };
 }
 
+// The OpenAPI document the discovery advertises, built from the Company's declared operations.
+//
+// 5.2 counts "the request URLs its listed APIs describe", so the document an agent reads and
+// the classifier that judges where the agent went are ONE fact. Held as two they drift: a
+// path in the document the classifier does not recognise is a destination an agent is
+// invited to call and no rule examines, and the reverse fails an agent for calling exactly
+// what it was told to. So both are derived from the same list, and a test walks the served
+// document and requires every operation in it to classify as a destination.
+//
+// Minimal on purpose. An agent needs the method, the path and enough of a response shape to
+// know the call succeeded; this grader is not pretending to be a shop.
+export function openapiFor(origin, operations = DEFAULT_OPERATIONS) {
+  const paths = {};
+  for (const op of operations) {
+    const method = String(op.method).toLowerCase();
+    paths[op.path] ??= {};
+    paths[op.path][method] = {
+      summary: op.summary ?? `${op.method} ${op.path}`,
+      operationId: op.operationId ?? `${method}${op.path.replace(/[^a-zA-Z0-9]+/g, "_")}`,
+      ...(op.path.includes("{")
+        ? { parameters: [...op.path.matchAll(/\{([^}]+)\}/g)].map(m => ({
+              name: m[1], in: "path", required: true, schema: { type: "string" } })) }
+        : {}),
+      responses: { "200": { description: "ok",
+        content: { "application/json": { schema: { type: "object" } } } } },
+    };
+  }
+  return {
+    openapi: "3.1.0",
+    info: { title: "Grader Shop API", version: "1.0.0",
+            description: "A small read-only API, so an agent has a signed-out request to make." },
+    servers: [{ url: origin }],
+    paths,
+  };
+}
+
+export const DEFAULT_OPERATIONS = [
+  { method: "GET", path: "/poppy/orders", summary: "List the orders of this session" },
+  { method: "GET", path: "/poppy/orders/{id}", summary: "One order" },
+];
+
+// The method and template pairs the classifier compares a request against, from the same
+// list the document is built from.
+export const operationsToTemplates = (operations = DEFAULT_OPERATIONS) =>
+  operations.map(op => ({ method: String(op.method).toUpperCase(), template: op.path }));
+
 // The domain's protected resource metadata, RFC 9728, at /.well-known/oauth-protected-resource.
 //
 // 3.2: "its `resource` MUST be exactly `https://{organization.domain}`, and its

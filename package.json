@@ -9,7 +9,9 @@
     "node": ">=22.6"
   },
   "scripts": {
-    "test": "node --experimental-strip-types --test \"tests/**/*.test.mjs\""
+    "test": "node --experimental-strip-types --test \"tests/**/*.test.mjs\"",
+    "start": "node --experimental-strip-types grade.mjs",
+    "killtest": "node tools/killtest.mjs"
   },
   "dependencies": {
     "jose": "^6.2.12"

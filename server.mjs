@@ -7,7 +7,8 @@
 import { createServer } from "node:http";
 import { createHash } from "node:crypto";
 import { recordOf, classify, pathOf } from "./record.mjs";
-import { resourceMetadataFor, authServerMetadataFor, authServerMetadataPath, discoveryFor } from "./discovery.mjs";
+import { resourceMetadataFor, authServerMetadataFor, authServerMetadataPath, discoveryFor,
+         openapiFor, operationsToTemplates, DEFAULT_OPERATIONS } from "./discovery.mjs";
 
 const DEFAULT_MAX_BODY = 256 * 1024;
 
@@ -67,7 +68,17 @@ export function createGrader(cfg) {
   // Company. The test asserting the three documents agree is what caught it.
   const derive = (origin) => (typeof cfg.discovery === "function" ? cfg.discovery(origin)
                              : cfg.discovery ?? discoveryFor(origin));
-  let config = { ...cfg, discovery: derive(cfg.origin) };
+  // One declaration of what this Company offers. `operations` builds BOTH the OpenAPI
+  // document an agent reads and the templates the classifier matches against, so the two
+  // cannot drift apart. `apiOperations` is still accepted for a test that wants to set the
+  // classifier's view on its own, which is how a disagreement between them is tested.
+  const operations = cfg.operations ?? (cfg.apiOperations ? null : DEFAULT_OPERATIONS);
+  const withApi = (origin, base) => ({
+    ...base,
+    openapi: operations ? openapiFor(origin, operations) : null,
+    apiOperations: cfg.apiOperations ?? (operations ? operationsToTemplates(operations) : []),
+  });
+  let config = withApi(cfg.origin, { ...cfg, discovery: derive(cfg.origin) });
   const warnings = validateConfig(config);
   const records = [];
   const maxBody = config.maxBodyBytes ?? DEFAULT_MAX_BODY;
@@ -173,6 +184,9 @@ export function createGrader(cfg) {
       // and reports every rule as not reached, which reads as the builder's fault.
       const docs = {
         "/.well-known/poppy.json": () => config.discovery,
+        // The document poppy.json advertises. Served from the same list the classifier uses,
+        // so an agent that follows it can only reach destinations rules examine.
+        ...(config.openapi ? { [pathOf(config.discovery.apis?.find(a => a.type === "openapi")?.url ?? "") ?? "/poppy/openapi.json"]: () => config.openapi } : {}),
         "/.well-known/oauth-protected-resource": () => resourceMetadataFor(config.origin),
         [authServerMetadataPath(config.origin)]: () => authServerMetadataFor(config.origin),
       };
@@ -196,7 +210,7 @@ export function createGrader(cfg) {
     // and by the rig once the public hostname is known.
     setOrigin(origin) {
       // Re-derive, unless an object was pinned on purpose, or the documents go stale.
-      config = { ...config, origin, discovery: derive(origin) };
+      config = withApi(origin, { ...config, origin, discovery: derive(origin) });
       validateConfig(config);
     },
     get config() { return config; },

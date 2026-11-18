@@ -190,6 +190,11 @@ export function buildReport(run) {
     unjudged: [...rules.filter(r => r.worst === "INCONCLUSIVE" && r.perCompany.some(c => c.cause === "grader")),
                ...pairwise.filter(p => p.verdict === "INCONCLUSIVE" && p.cause === "grader")].length,
     rules: rules.length + pairwise.length, requests: requests.length,
+    // How many places this run's traffic came from. One is the ordinary case. More than one
+    // means something that is not the builder's agent reached the grader while they held the
+    // lease, which no amount of attribution can prevent and which they have to be told,
+    // because a bare request from elsewhere is a failure on a rule they did not break.
+    sources: new Set(all.map(({ r }) => r.remoteAddress).filter(Boolean)).size,
   };
 
   // Counts, never adjectives, and never the word conform.
@@ -206,7 +211,8 @@ export function buildReport(run) {
   return {
     spec: { version: PROV.version, published: PROV.published, commit: PROV.commit,
             specSha256: PROV.pages?.spec?.sha256 ?? null, verified: PROV.verified_against_authors_hashes },
-    grader: { commit: run.graderCommit ?? "unknown", kitZipSha256: REF_PROV.kit_zip_sha256 ?? null },
+    grader: { commit: run.graderCommit ?? "unknown", kitZipSha256: REF_PROV.kit_zip_sha256 ?? null,
+              clock: iso(Math.floor(Date.now() / 1000)) },
     run: { started: run.started ?? null, ended: run.ended ?? null, frozen: !!run.frozen,
            companies: [A.ctx.identifier, B.ctx.identifier], issuers },
     summary, topSentence, rules, pairwise, requests,
@@ -222,13 +228,26 @@ export function buildReport(run) {
         // Requests that arrived after this run's per-Company limit. Counted and reported,
         // never silently dropped: absence that does not announce itself reads as conformance.
         beyondLimit: run.beyondLimit ?? 0,
+        // Requests that reached the Companies in the window before this run was leased, and
+        // so belong to no run. An agent that fetches a discovery document once at startup
+        // and caches it does it here, which is why a rule about documents can abstain on a
+        // run that did everything right.
+        beforeLease: run.beforeLease ?? 0,
         misdirected: all.filter(({ r }) => r.misdirected).length,
         rejected: all.filter(({ r }) => r.rejected).length,
         refused: all.filter(({ r }) => r.refused).length,
         incompleteBodies: all.filter(({ r }) => r.bodyComplete === false).length,
       },
       warnings: run.warnings ?? [],
+      sources: summary.sources > 1
+        ? `This run's requests came from ${summary.sources} different sources. One agent is graded at a time, but anything that can reach these hostnames can send a request, so a request here may not be yours: a scanner probing the hostname, or an earlier run's agent still polling. The request index shows a salted source per request, so you can tell which are yours.`
+        : null,
+      beforeLease: (run.beforeLease ?? 0) > 0
+        ? `${run.beforeLease} request(s) reached the Companies in the ${Math.round((run.beforeLeaseWindowSeconds ?? 600) / 60)} minutes before this run was leased and belong to no run, so no rule judged them. An agent that fetches a discovery document once at startup and caches it does it here, which is the usual reason a rule about documents is not reached by a run that did everything right.`
+        : null,
+      transport: "Verdicts are judged against the request as this grader received it. Anything in front of the grader that rewrites a request URL, for example normalising percent encoding or removing dot segments, would be judged as the agent's doing. The grader's own clock is shown above: a constant offset between it and your `iat` values is a clock, not a defect.",
       privacy: "This report is private to whoever holds its link. It is not listed anywhere and nothing about this run is published.",
+      retention: "The report is held in memory for at most 24 hours, and until this grader process restarts, whichever comes first. After that its link answers exactly what an unknown link answers.",
       notReplayable: "Signatures, access tokens and bodies are not shown on this page, so the verdicts cannot be rerun from it. They are a pure function of the recorded requests at the grader commit above.",
     },
   };
@@ -310,6 +329,10 @@ export function renderHtml(rep) {
         : `This run is open. Verdicts cover the requests seen so far and will change as more arrive.`}</p>`
     + (rep.run.issuers.length > 1
         ? `<p>Requests from ${rep.run.issuers.length} client_ids reached the grader during this run; verdicts cover all of them. The request index shows which.</p>` : "")
+    // Both of these go ABOVE the verdicts rather than in the About section, because each is
+    // an explanation of a verdict a builder is about to read and disagree with.
+    + (a.sources ? `<p>${esc(a.sources)}</p>` : "")
+    + (a.beforeLease ? `<p>${esc(a.beforeLease)}</p>` : "")
     + `<h2>Failed</h2>${rules[0] || "<p>Nothing failed.</p>"}`
     + `<h2>Not judged</h2>${rules[1] || "<p>Every rule was judged.</p>"}`
     + `<details><summary>Passed</summary>${rules[2] || "<p>Nothing passed.</p>"}</details>`
@@ -319,5 +342,7 @@ export function renderHtml(rep) {
     + `<p>Not judged by this grader at all:</p><ul>${a.notJudged.map(x => `<li>${esc(x)}</li>`).join("")}</ul>`
     + `<p>Recorded but not judged: ${esc(JSON.stringify(a.recordedNotJudged))}.</p>`
     + (a.warnings.length ? `<ul>${a.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul>` : "")
-    + `<p>${esc(a.privacy)}</p><p>${esc(a.notReplayable)}</p></body></html>`;
+    + `<p>Grader clock when this page was built: ${esc(rep.grader.clock)}.</p>`
+    + `<p>${esc(a.transport)}</p>`
+    + `<p>${esc(a.privacy)}</p><p>${esc(a.retention)}</p><p>${esc(a.notReplayable)}</p></body></html>`;
 }

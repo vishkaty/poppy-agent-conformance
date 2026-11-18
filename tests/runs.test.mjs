@@ -401,3 +401,128 @@ test("a canary request that arrives but is not a destination is counted as a sho
     assert.match(body.why, /classified as destinations/);
   } finally { await r.close(); }
 });
+
+test("the report says how many requests arrived before the lease", async () => {
+  // The likeliest wrong verdict in this design: an agent fetches poppy.json on startup and
+  // caches it, so by the time the builder leases, the one request that could have judged
+  // "a Session JWT must not go to a discovery document" has already happened. The rule then
+  // abstains and tells the builder to do discovery, which they did. Stating the count is
+  // what lets them see why.
+  const { r, base } = await rig();
+  try {
+    await fetch(`${base}/.well-known/poppy.json`);
+    await fetch(`${base}/v1/orders`);
+    const { token } = await (await fetch(`${base}/grader/runs`, { method: "POST" })).json();
+    const rep = await (await fetch(`${base}/grader/report/${token}.json`)).json();
+    assert.equal(rep.about.recordedNotJudged.beforeLease, 2,
+      "requests that arrived before the lease were excluded without the report saying so");
+    assert.match(JSON.stringify(rep.about), /before this run/i,
+      "nothing on the page explains what that count means");
+  } finally { await r.close(); }
+});
+
+test("the report says when traffic in a run came from more than one source", async () => {
+  // A previous builder's agent still long polling, or a scanner probing a fresh hostname,
+  // lands in whoever holds the lease. Lease attribution cannot prevent that, so the report
+  // has to make it visible: a bare request from somewhere else would otherwise be a FAIL on
+  // "every request to a listed destination carries a Session JWT" with no way to argue.
+  const { r, base } = await rig({ companies: COMPANIES().map(c => ({ ...c, trustForwardedFor: true })) });
+  try {
+    const { token } = await (await fetch(`${base}/grader/runs`, { method: "POST" })).json();
+    await fetch(`${base}/v1/orders`, { headers: { "x-forwarded-for": "203.0.113.4" } });
+    await fetch(`${base}/v1/orders`, { headers: { "x-forwarded-for": "198.51.100.9" } });
+    const rep = await (await fetch(`${base}/grader/report/${token}.json`)).json();
+    assert.equal(rep.summary.sources, 2, "the report did not notice two sources");
+    const html = await (await fetch(`${base}/grader/report/${token}`)).text();
+    assert.match(html, /two different sources|2 different sources/i,
+      "the page does not say the traffic came from more than one source");
+    assert.ok(!html.includes("203.0.113.4"), "the page shows a raw client address");
+  } finally { await r.close(); }
+});
+
+test("ending a run twice answers the same thing, and does not look like a lost run", async () => {
+  const { r, base } = await rig();
+  try {
+    const { token } = await (await fetch(`${base}/grader/runs`, { method: "POST" })).json();
+    const a = await fetch(`${base}/grader/runs/${token}/end`, { method: "POST" });
+    const b = await fetch(`${base}/grader/runs/${token}/end`, { method: "POST" });
+    assert.equal(a.status, 200);
+    assert.equal(b.status, 200, "a retried end looked like a wrong token");
+    assert.deepEqual(await a.json(), await b.json());
+  } finally { await r.close(); }
+});
+
+test("every control-plane path is kept out of the run, not just the report", async () => {
+  // The POST that creates the lease is below the mark by construction, so testing only that
+  // one proves nothing about the others.
+  const { r, base } = await rig();
+  try {
+    const { token } = await (await fetch(`${base}/grader/runs`, { method: "POST" })).json();
+    await fetch(`${base}/v1/orders`);
+    await fetch(`${base}/grader/runs`, { method: "POST" });              // 409 while held
+    await fetch(`${base}/grader/health`);
+    await fetch(`${base}/grader/report/${token}.json`);
+    await fetch(`${base}/grader/runs/${token}/end`, { method: "POST" });
+    const rep = await (await fetch(`${base}/grader/report/${token}.json`)).json();
+    assert.equal(rep.requests.length, 1,
+      `a control-plane request was charged to the run: ${rep.requests.map(q => q.url).join(" ")}`);
+  } finally { await r.close(); }
+});
+
+test("a wrong token is indistinguishable on every path that takes one", async () => {
+  const { r, base } = await rig();
+  try {
+    const { token } = await (await fetch(`${base}/grader/runs`, { method: "POST" })).json();
+    const wrong = token.slice(0, -1) + (token.at(-1) === "A" ? "B" : "A");
+    const unknownGet = await fetch(`${base}/grader/nothing-here`);
+    const unknownPost = await fetch(`${base}/grader/nothing-here`, { method: "POST" });
+    const cases = [
+      ["html", await fetch(`${base}/grader/report/${wrong}`)],
+      ["json", await fetch(`${base}/grader/report/${wrong}.json`)],
+      ["short", await fetch(`${base}/grader/report/tooshort`)],
+      ["alphabet", await fetch(`${base}/grader/report/${"!".repeat(22)}`)],
+    ];
+    const want = await unknownGet.text();
+    for (const [what, res] of cases) {
+      assert.equal(res.status, 404, what);
+      assert.equal(await res.text(), want, `${what}: a wrong token is distinguishable by its body`);
+    }
+    const endWrong = await fetch(`${base}/grader/runs/${wrong}/end`, { method: "POST" });
+    assert.equal(endWrong.status, 404);
+    assert.equal(await endWrong.text(), await unknownPost.text(),
+      "a wrong token on the end path is distinguishable");
+  } finally { await r.close(); }
+});
+
+test("the report actually contains the run, and neither output carries the token", async () => {
+  // A page with the right headers and no content would pass a test that only checks headers.
+  const { r, base } = await rig();
+  try {
+    const { token } = await (await fetch(`${base}/grader/runs`, { method: "POST" })).json();
+    await fetch(`${base}/v1/orders`);
+    const html = await (await fetch(`${base}/grader/report/${token}`)).text();
+    const jsonText = await (await fetch(`${base}/grader/report/${token}.json`)).text();
+    assert.match(html, /\/v1\/orders/, "the page does not show the request that was recorded");
+    assert.match(html, /session\.header-sent/, "the page does not show the rules");
+    assert.ok(!html.includes(token), "the page contains its own token");
+    assert.ok(!jsonText.includes(token), "the JSON contains its own token");
+  } finally { await r.close(); }
+});
+
+test("health says what a 404 cannot: which process this is and since when", async () => {
+  // Reports live in memory, so a restart makes every token 404 with the same bytes as a
+  // typo. Without this a builder cannot tell the two apart.
+  const { r, base } = await rig();
+  try {
+    const res = await fetch(`${base}/grader/health`);
+    assert.equal(res.status, 200);
+    const h = await res.json();
+    assert.ok(Number.isInteger(h.started_at), "no process start time");
+    assert.equal(h.protocol_version, "1.0");
+    assert.equal(h.lease_held, false);
+    const { token } = await (await fetch(`${base}/grader/runs`, { method: "POST" })).json();
+    const after = await (await fetch(`${base}/grader/health`)).json();
+    assert.equal(after.lease_held, true);
+    assert.ok(!JSON.stringify(after).includes(token), "health leaks the holder's token");
+  } finally { await r.close(); }
+});

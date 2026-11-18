@@ -12,6 +12,17 @@ import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { discoveryFor } from "../discovery.mjs";
+import { createGrader } from "../server.mjs";
+import { classify } from "../record.mjs";
+
+// What a Company declares once: the operations it offers. The OpenAPI document an agent
+// reads and the classifier that judges where the agent went are both built from this, so
+// they cannot disagree about what a destination is.
+const OPERATIONS = [
+  { method: "GET", path: "/poppy/orders", summary: "List the orders of the signed-out session" },
+  { method: "GET", path: "/poppy/orders/{id}", summary: "One order" },
+  { method: "POST", path: "/poppy/feedback", summary: "Leave feedback about this grader" },
+];
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const { validateSchema, formatSchemaErrors } = await import("../reference/schema.ts");
@@ -107,4 +118,48 @@ test("the issuer metadata declares no sign-in grant, because this grader offers 
   const m = authServerMetadataFor("https://shop.example");
   assert.ok(!m.grant_types_supported.includes("authorization_code"));
   assert.ok(!m.grant_types_supported.includes("urn:ietf:params:oauth:grant-type:device_code"));
+});
+
+test("the OpenAPI document the discovery advertises is actually served", async () => {
+  // Without it a conforming agent fetches poppy.json, follows apis[].url, gets 404, and has
+  // no operation to call. Every API rule would then be unreachable for our reason.
+  const g = createGrader({ origin: "http://127.0.0.1", operations: OPERATIONS });
+  const port = await g.listen(0);
+  g.setOrigin(`http://127.0.0.1:${port}`);
+  try {
+    const url = g.config.discovery.apis.find(a => a.type === "openapi").url;
+    const res = await fetch(url);
+    assert.equal(res.status, 200, `${url} is advertised and not served`);
+    assert.match(res.headers.get("content-type"), /json/);
+    const doc = await res.json();
+    assert.match(doc.openapi, /^3\./);
+    assert.ok(Object.keys(doc.paths ?? {}).length > 0, "the document describes no operation");
+    assert.equal(doc.servers?.[0]?.url, `http://127.0.0.1:${port}`,
+      "the document names a different server than the one serving it");
+  } finally { await g.close(); }
+});
+
+test("the document and the classifier cannot disagree about what a destination is", async () => {
+  // 5.2 counts "the request URLs its listed APIs describe", so these are one fact. Held as
+  // two, a path in the document that the classifier does not recognise is a destination an
+  // agent is invited to call and no rule examines, and the reverse fails an agent for
+  // calling something never advertised.
+  const g = createGrader({ origin: "http://127.0.0.1:8080", operations: OPERATIONS });
+  try {
+    const doc = g.config.openapi;
+    const described = [];
+    for (const [path, ops] of Object.entries(doc.paths))
+      for (const method of Object.keys(ops)) described.push([method.toUpperCase(), path]);
+    assert.ok(described.length >= 2, `the document describes only ${described.length} operations`);
+
+    for (const [method, template] of described) {
+      const url = `http://127.0.0.1:8080${template.replace(/\{[^}]*\}/g, "1")}`;
+      const c = classify(url, method, g.config);
+      assert.equal(c.isResource, true, `${method} ${template} is described and not classified: ${c.why}`);
+    }
+    // and the control, so this is not just "everything is a destination"
+    assert.equal(classify("http://127.0.0.1:8080/not-described", "GET", g.config).isResource, false);
+    assert.equal(classify(`http://127.0.0.1:8080${described[0][1]}`, "DELETE", g.config).isResource, false,
+      "a method the document does not describe was classified as a destination");
+  } finally { await g.close(); }
 });
