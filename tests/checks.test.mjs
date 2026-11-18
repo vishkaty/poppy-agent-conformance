@@ -165,3 +165,18 @@ test("the pairwise checks are INCONCLUSIVE with traffic at only one Company", ()
   const out = gradePair(conforming, [], CTX_A, CTX_B);
   for (const r of out) assert.equal(r.verdict, "INCONCLUSIVE", `${r.id}: ${r.verdict}`);
 });
+
+test("every FAIL names at least one request that decided it", async () => {
+  // A FAIL a builder cannot trace to a request is one they have to ask us about, and this
+  // grader is meant to answer without us. Checks that filter a list rather than loop over
+  // it were returning an empty decidedBy, so the report rendered "decided by request #"
+  // with nothing after it.
+  const missing = [];
+  for (const c of CHECKS) {
+    const log = await BREACH[c.id]();
+    const v = grade(log, f.ctx).find(x => x.id === c.id);
+    assert.equal(v.verdict, "FAIL", `${c.id} did not fail its own breach`);
+    if (!v.decidedBy || v.decidedBy.length === 0) missing.push(c.id);
+  }
+  assert.deepEqual(missing, [], `${missing.length} check(s) FAIL without naming a request`);
+});

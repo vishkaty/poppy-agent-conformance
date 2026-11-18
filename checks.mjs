@@ -69,8 +69,19 @@ function verifyCompact(compact, jwk) {
 }
 
 const PASS = why => ({ verdict: "PASS", why });
-const FAIL = (why, evidence = []) => ({ verdict: "FAIL", why, evidence });
-const SKIP = why => ({ verdict: "INCONCLUSIVE", why });
+// FAIL carries the records that decided it, so a report can show the builder the request
+// and not only a sentence about it. A FAIL a builder cannot trace to a request is one they
+// have to ask us about, and this grader is meant to answer without us.
+const FAIL = (why, evidence = [], decidedBy = []) => ({ verdict: "FAIL", why, evidence, decidedBy });
+// SKIP carries WHY it abstained. "unreached" means the agent never got to the point the
+// rule governs, which the builder can change; "grader" means this grader could not judge
+// it, which the builder cannot. Reporting both as one label blames the builder for our
+// limits.
+// Record the message and the request together, in one statement, so it can be the body of
+// an `if` without braces.
+const note = (bad, hits, r, msg) => { bad.push(msg); hits.push(r); };
+
+const SKIP = (why, cause = "unreached") => ({ verdict: "INCONCLUSIVE", why, cause });
 
 // `htu` is the request URL without query or fragment (5.2), so the comparison is against
 // the URL we served, not the one we expected.
@@ -97,7 +108,7 @@ export const CHECKS = [
       const bare = resource.filter(r => !r.headers?.["poppy-session"]);
       return bare.length
         ? FAIL(`${bare.length} resource request(s) carried no Session header`,
-               bare.slice(0, 3).map(r => `${r.method} ${r.path}`))
+               bare.slice(0, 3).map(r => `${r.method} ${r.path}`), bare)
         : PASS(`every one of ${resource.length} resource request(s) carried the header`);
     },
   },
@@ -110,7 +121,7 @@ export const CHECKS = [
       if (!s.length) return SKIP("no Session header was sent");
       const bad = s.filter(x => x.jwt.header.typ !== "poppy-session+jwt");
       return bad.length
-        ? FAIL(`typ was not poppy-session+jwt`, [...new Set(bad.map(x => JSON.stringify(x.jwt.header.typ)))].slice(0, 3))
+        ? FAIL(`typ was not poppy-session+jwt`, [...new Set(bad.map(x => JSON.stringify(x.jwt.header.typ)))].slice(0, 3), bad.map(x => x.r))
         : PASS("every Session JWT declared poppy-session+jwt");
     },
   },
@@ -123,7 +134,7 @@ export const CHECKS = [
       if (!s.length) return SKIP("no Session header was sent");
       const bad = s.filter(x => x.jwt.header.alg !== "ES256");
       return bad.length
-        ? FAIL("a Session JWT was not signed with ES256", [...new Set(bad.map(x => String(x.jwt.header.alg)))])
+        ? FAIL("a Session JWT was not signed with ES256", [...new Set(bad.map(x => String(x.jwt.header.alg)))], bad.map(x => x.r))
         : PASS("every Session JWT used ES256");
     },
   },
@@ -140,9 +151,9 @@ export const CHECKS = [
       const bad = s.filter(x => x.jwt.payload.aud !== ctx.identifier);
       if (bad.length) return FAIL(
         `aud was not this Company's identifier, ${ctx.identifier}`,
-        [...new Set(bad.map(x => JSON.stringify(x.jwt.payload.aud)))].slice(0, 3));
+        [...new Set(bad.map(x => JSON.stringify(x.jwt.payload.aud)))].slice(0, 3), bad.map(x => x.r));
       const arrays = s.filter(x => Array.isArray(x.jwt.payload.aud));
-      return arrays.length ? FAIL("aud was an array, and 1.0 requires a single string")
+      return arrays.length ? FAIL("aud was an array, and 1.0 requires a single string", [], arrays.map(x => x.r))
                            : PASS(`aud was exactly ${ctx.identifier} on every request`);
     },
   },
@@ -153,22 +164,22 @@ export const CHECKS = [
     run(log) {
       const s = sessionRequests(log);
       if (!s.length) return SKIP("no Session header was sent");
-      const bad = [], unusable = [];
+      const bad = [], unusable = [], hits = [];
       for (const { r, jwt } of s) {
         const want = htuOf(r);
         // A relative or unparseable recorded url means the LOG is wrong, not the agent. It
         // used to make htuOf return null and the comparison silently skip, so a wrong htu
         // passed: a check that cannot fail. Say so instead of judging.
         if (!want) { unusable.push(`${r.method} ${r.path}: the recorded url is not absolute`); continue; }
-        if (jwt.payload.htm !== r.method) bad.push(`${r.method} ${r.path}: htm was ${JSON.stringify(jwt.payload.htm)}`);
+        if (jwt.payload.htm !== r.method) note(bad, hits, r, `${r.method} ${r.path}: htm was ${JSON.stringify(jwt.payload.htm)}`);
         else {
           const got = normalizeUrl(jwt.payload.htu);
-          if (!got) bad.push(`${r.method} ${r.path}: htu was ${JSON.stringify(jwt.payload.htu)}, not an absolute URL`);
-          else if (got !== want) bad.push(`${r.method} ${r.path}: htu was ${got}, served ${want}`);
+          if (!got) note(bad, hits, r, `${r.method} ${r.path}: htu was ${JSON.stringify(jwt.payload.htu)}, not an absolute URL`);
+          else if (got !== want) note(bad, hits, r, `${r.method} ${r.path}: htu was ${got}, served ${want}`);
         }
       }
-      if (unusable.length) return SKIP(`the recorder did not give an absolute url: ${unusable[0]}`);
-      return bad.length ? FAIL("htm or htu did not match the request", bad.slice(0, 3))
+      if (unusable.length) return SKIP(`the recorder did not give an absolute url: ${unusable[0]}`, "grader");
+      return bad.length ? FAIL("htm or htu did not match the request", bad.slice(0, 3), hits)
                         : PASS(`htm and htu matched on all ${s.length} request(s)`);
     },
   },
@@ -181,15 +192,15 @@ export const CHECKS = [
     run(log) {
       const s = sessionRequests(log);
       if (!s.length) return SKIP("no Session header was sent");
-      const bad = [];
+      const bad = []; const hits = [];
       for (const { r, jwt } of s) {
         const iat = jwt.payload.iat;
-        if (typeof iat !== "number") { bad.push(`${r.method} ${r.path}: iat was ${JSON.stringify(iat)}, not a number`); continue; }
+        if (typeof iat !== "number") { note(bad, hits, r, `${r.method} ${r.path}: iat was ${JSON.stringify(iat)}, not a number`); continue; }
         const skew = Math.abs(r.at - iat);
-        if (skew > WINDOW_SECONDS + SKEW_SECONDS) bad.push(`${r.method} ${r.path}: iat was ${skew}s from when we saw it`);
+        if (skew > WINDOW_SECONDS + SKEW_SECONDS) note(bad, hits, r, `${r.method} ${r.path}: iat was ${skew}s from when we saw it`);
       }
       return bad.length
-        ? FAIL(`iat fell outside our acceptance window of ${WINDOW_SECONDS}s plus ${SKEW_SECONDS}s of clock skew`, bad.slice(0, 3))
+        ? FAIL(`iat fell outside our acceptance window of ${WINDOW_SECONDS}s plus ${SKEW_SECONDS}s of clock skew`, bad.slice(0, 3), hits)
         : PASS(`iat was within ${WINDOW_SECONDS + SKEW_SECONDS}s on every request`);
     },
   },
@@ -201,7 +212,7 @@ export const CHECKS = [
       const s = sessionRequests(log);
       if (!s.length) return SKIP("no Session header was sent");
       const required = ["iss", "aud", "sid", "sub", "htm", "htu", "iat", "jti"];
-      const bad = [];
+      const bad = []; const hits = [];
       for (const { r, jwt } of s) {
         // `=== undefined` alone accepted "" as present, so an agent sending empty strings
         // passed. 5.2 requires the claim, and an empty sid or jti is not a value: "sid is
@@ -211,14 +222,14 @@ export const CHECKS = [
         const wrongType = ["iss", "aud", "sid", "sub", "htm", "htu", "jti"]
           .filter(c => jwt.payload[c] !== undefined && typeof jwt.payload[c] !== "string")
           .concat(typeof jwt.payload.iat !== "number" && jwt.payload.iat !== undefined ? ["iat"] : []);
-        if (missing.length) bad.push(`${r.method} ${r.path}: missing ${missing.join(", ")}`);
-        if (empty.length) bad.push(`${r.method} ${r.path}: empty ${empty.join(", ")}`);
-        if (wrongType.length) bad.push(`${r.method} ${r.path}: wrong type for ${wrongType.join(", ")}`);
+        if (missing.length) note(bad, hits, r, `${r.method} ${r.path}: missing ${missing.join(", ")}`);
+        if (empty.length) note(bad, hits, r, `${r.method} ${r.path}: empty ${empty.join(", ")}`);
+        if (wrongType.length) note(bad, hits, r, `${r.method} ${r.path}: wrong type for ${wrongType.join(", ")}`);
         const token = r.headers?.authorization;
         if (!token && jwt.payload.ath !== undefined)
-          bad.push(`${r.method} ${r.path}: ath present with no access token, which 5.2 says is left out`);
+          note(bad, hits, r, `${r.method} ${r.path}: ath present with no access token, which 5.2 says is left out`);
       }
-      return bad.length ? FAIL("a required Session claim was missing, or ath was sent without a token", bad.slice(0, 3))
+      return bad.length ? FAIL("a required Session claim was missing, or ath was sent without a token", bad.slice(0, 3), hits)
                         : PASS("every required claim was present on every request");
     },
   },
@@ -237,7 +248,7 @@ export const CHECKS = [
       const bad = [...bySid].filter(([, v]) => v.size > 1);
       if (!bySid.size) return SKIP("no sid was sent");
       return bad.length
-        ? FAIL("sub or agent_id changed within one Session", bad.map(([sid, v]) => `sid ${String(sid).slice(0, 12)}: ${v.size} different values`))
+        ? FAIL("sub or agent_id changed within one Session", bad.map(([sid, v]) => `sid ${String(sid).slice(0, 12)}: ${v.size} different values`), s.map(x => x.r))
         : PASS(`sub and agent_id were stable across ${bySid.size} Session(s)`);
     },
   },
@@ -270,7 +281,7 @@ export const CHECKS = [
       const total = s.length;
       if (replayed.length) return FAIL(
         "one jti signed requests that differ, so a signature was replayed onto another request",
-        replayed.map(([j, sh]) => `${String(j).slice(0, 16)} signed ${sh.size} different requests`).slice(0, 3));
+        replayed.map(([j, sh]) => `${String(j).slice(0, 16)} signed ${sh.size} different requests`).slice(0, 3), s.map(x => x.r));
       return byJti.size < total
         ? PASS(`no jti signed two different requests; ${total - byJti.size} identical resend(s) seen, which 5.3 leaves to the Company to reject`)
         : PASS(`all ${byJti.size} jti values were distinct`);
@@ -283,17 +294,17 @@ export const CHECKS = [
     run(log) {
       const s = sessionRequests(log);
       if (!s.length) return SKIP("no Session header was sent");
-      const bad = [], none = [];
+      const bad = [], none = [], hits = [];
       for (const { r, jwt } of s) {
         const dlg = decodeJwt(jwt.header.poppy_dlg);
         if (!dlg) { none.push(`${r.method} ${r.path}`); continue; }
-        if (dlg.header.typ !== "poppy-delegation+jwt") bad.push(`${r.method} ${r.path}: ${JSON.stringify(dlg.header.typ)}`);
+        if (dlg.header.typ !== "poppy-delegation+jwt") note(bad, hits, r, `${r.method} ${r.path}: ${JSON.stringify(dlg.header.typ)}`);
       }
       // Absence has its own check, delegation.present. Reporting it here was a
       // misattribution: the defect is that no delegation was sent at all, and 5.2 has its
       // own sentence for that.
       if (none.length && !bad.length) return SKIP("no delegation was sent, which delegation.present reports");
-      return bad.length ? FAIL("a delegation did not declare poppy-delegation+jwt", bad.slice(0, 3))
+      return bad.length ? FAIL("a delegation did not declare poppy-delegation+jwt", bad.slice(0, 3), hits)
                         : PASS("every Session JWT carried a delegation declaring poppy-delegation+jwt");
     },
   },
@@ -305,13 +316,13 @@ export const CHECKS = [
       const s = sessionRequests(log);
       const dlgs = s.map(x => decodeJwt(x.jwt.header.poppy_dlg)).filter(Boolean);
       if (!dlgs.length) return SKIP("no delegation was sent");
-      const bad = [];
+      const bad = []; const hits = [];
       for (const d of dlgs) {
         const { iat, exp } = d.payload;
         if (typeof iat !== "number" || typeof exp !== "number") { bad.push(`iat or exp was not a number`); continue; }
         if (exp - iat > 86400) bad.push(`exp was ${Math.round((exp - iat) / 3600)}h after iat`);
       }
-      return bad.length ? FAIL("a delegation lasted longer than 24 hours", [...new Set(bad)].slice(0, 3))
+      return bad.length ? FAIL("a delegation lasted longer than 24 hours", [...new Set(bad)].slice(0, 3), s.map(x => x.r))
                         : PASS("every delegation expired within 24 hours of issue");
     },
   },
@@ -338,7 +349,7 @@ export const CHECKS = [
         if (typeof v === "object") { for (const x of Object.values(v)) leaves(x, out); return out; }
         out.push(String(v)); return out;
       };
-      const bad = [];
+      const bad = []; const hits = [];
       for (const { dlg, ses } of pairs) {
         const payload = { ...dlg.payload };
         delete payload.iss;    // required by 5.2
@@ -353,7 +364,7 @@ export const CHECKS = [
           if (v.toLowerCase() === String(ctx.domain).toLowerCase() || hostOf(v) === String(ctx.domain).toLowerCase())
             bad.push("the delegation names this Company's domain");
       }
-      return bad.length ? FAIL("a delegation carried something it must not", [...new Set(bad)].slice(0, 4))
+      return bad.length ? FAIL("a delegation carried something it must not", [...new Set(bad)].slice(0, 4), s.map(x => x.r))
                         : PASS("no delegation carried a User ID, Agent ID, or anything naming this Company");
     },
   },
@@ -378,7 +389,7 @@ export const CHECKS = [
       // Session. Requiring one value across the whole log failed both of those.
       const withHeader = sessionRequests(log).filter(x => x.r.isResource);
       const any = resource.filter(r => r.headers?.["poppy-version"]);
-      if (!any.length) return FAIL("no request carried a Poppy-Version header");
+      if (!any.length) return FAIL("no request carried a Poppy-Version header", [], resource);
       const bySid = new Map();
       for (const { r, jwt } of withHeader) {
         const sid = jwt.payload.sid;
@@ -390,7 +401,7 @@ export const CHECKS = [
       const mixed = [...bySid].filter(([, v]) => v.size > 1);
       return mixed.length
         ? FAIL("Poppy-Version changed within one Session",
-               mixed.map(([sid, v]) => `sid ${String(sid).slice(0, 12)}: ${[...v].join(", ")}`).slice(0, 3))
+               mixed.map(([sid, v]) => `sid ${String(sid).slice(0, 12)}: ${[...v].join(", ")}`).slice(0, 3), withHeader.map(x => x.r))
         : PASS(`every Session declared one Poppy-Version across ${bySid.size} Session(s)`);
     },
   },
@@ -404,20 +415,20 @@ export const CHECKS = [
     run(log) {
       const s = sessionRequests(log);
       if (!s.length) return SKIP("no Session header was sent");
-      const bad = [], unknown = [];
+      const bad = [], unknown = []; const hits = [];
       for (const { r, jwt } of s) {
         const dlg = decodeJwt(jwt.header.poppy_dlg);
         const jwk = dlg?.payload?.cnf?.jwk;
         if (!jwk) continue;                       // delegation.typ reports the absence
         const ok = verifyCompact(jwt.compact, jwk);
         if (ok === null) { unknown.push(`${r.method} ${r.path}: alg ${JSON.stringify(jwt.header.alg)}`); continue; }
-        if (!ok) { bad.push(`${r.method} ${r.path}: the signature does not verify against the delegation's cnf.jwk`); continue; }
+        if (!ok) { note(bad, hits, r, `${r.method} ${r.path}: the signature does not verify against the delegation's cnf.jwk`); continue; }
         const thumb = thumbprintOf(jwk);
         if (thumb && jwt.header.kid && jwt.header.kid !== thumb)
-          bad.push(`${r.method} ${r.path}: kid is not the delegated key's thumbprint`);
+          note(bad, hits, r, `${r.method} ${r.path}: kid is not the delegated key's thumbprint`);
       }
-      if (bad.length) return FAIL("a Session JWT was not signed by the key its delegation names", bad.slice(0, 3));
-      if (unknown.length) return SKIP(`an algorithm this grader cannot verify: ${unknown[0]}`);
+      if (bad.length) return FAIL("a Session JWT was not signed by the key its delegation names", bad.slice(0, 3), hits);
+      if (unknown.length) return SKIP(`an algorithm this grader cannot verify: ${unknown[0]}`, "grader");
       return PASS(`every Session JWT verified against its delegation's key on ${s.length} request(s)`);
     },
   },
@@ -429,14 +440,14 @@ export const CHECKS = [
       const dlgs = sessionRequests(log).map(x => decodeJwt(x.jwt.header.poppy_dlg)).filter(Boolean);
       if (!dlgs.length) return SKIP("no delegation was sent");
       const PRIVATE = ["d", "p", "q", "dp", "dq", "qi", "k"];
-      const bad = [];
+      const bad = []; const hits = [];
       for (const d of dlgs) {
         const jwk = d.payload?.cnf?.jwk;
         if (!jwk) continue;
         const found = PRIVATE.filter(m => jwk[m] !== undefined);
         if (found.length) bad.push(`cnf.jwk carries ${found.join(", ")}`);
       }
-      return bad.length ? FAIL("a delegation exposed private key material", [...new Set(bad)])
+      return bad.length ? FAIL("a delegation exposed private key material", [...new Set(bad)], sessionRequests(log).map(x => x.r))
                         : PASS(`no delegation carried a private key member across ${dlgs.length} delegation(s)`);
     },
   },
@@ -447,14 +458,14 @@ export const CHECKS = [
     run(log) {
       const s = sessionRequests(log);
       if (!s.length) return SKIP("no Session header was sent");
-      const bad = [];
+      const bad = []; const hits = [];
       for (const { r, jwt } of s) {
         const dlg = decodeJwt(jwt.header.poppy_dlg);
         const exp = dlg?.payload?.exp, iat = jwt.payload.iat;
         if (typeof exp !== "number" || typeof iat !== "number") continue;
-        if (iat > exp) bad.push(`${r.method} ${r.path}: signed ${iat - exp}s after the delegation expired`);
+        if (iat > exp) note(bad, hits, r, `${r.method} ${r.path}: signed ${iat - exp}s after the delegation expired`);
       }
-      return bad.length ? FAIL("a Session JWT was signed after its delegation expired", bad.slice(0, 3))
+      return bad.length ? FAIL("a Session JWT was signed after its delegation expired", bad.slice(0, 3), hits)
                         : PASS("every Session JWT was signed within its delegation's lifetime");
     },
   },
@@ -465,14 +476,14 @@ export const CHECKS = [
     run(log) {
       const s = sessionRequests(log);
       if (!s.length) return SKIP("no Session header was sent");
-      const bad = [];
+      const bad = []; const hits = [];
       for (const { r, jwt } of s) {
         const dlg = decodeJwt(jwt.header.poppy_dlg);
         if (!dlg) continue;
         if (dlg.payload?.iss !== jwt.payload.iss)
-          bad.push(`${r.method} ${r.path}: delegation iss ${JSON.stringify(dlg.payload?.iss)} vs Session iss ${JSON.stringify(jwt.payload.iss)}`);
+          note(bad, hits, r, `${r.method} ${r.path}: delegation iss ${JSON.stringify(dlg.payload?.iss)} vs Session iss ${JSON.stringify(jwt.payload.iss)}`);
       }
-      return bad.length ? FAIL("a delegation named a different client than its Session JWT", bad.slice(0, 2))
+      return bad.length ? FAIL("a delegation named a different client than its Session JWT", bad.slice(0, 2), hits)
                         : PASS("every delegation named the same client_id as its Session JWT");
     },
   },
@@ -483,14 +494,14 @@ export const CHECKS = [
     run(log) {
       const s = sessionRequests(log).filter(x => x.r.headers?.authorization);
       if (!s.length) return SKIP("no request carried an access token");
-      const bad = [];
+      const bad = []; const hits = [];
       for (const { r, jwt } of s) {
         const token = String(r.headers.authorization).replace(/^(DPoP|Bearer)\s+/i, "");
         const want = createHash("sha256").update(token).digest("base64url");
-        if (jwt.payload.ath === undefined) bad.push(`${r.method} ${r.path}: a token was sent with no ath`);
-        else if (jwt.payload.ath !== want) bad.push(`${r.method} ${r.path}: ath is not the hash of the token sent`);
+        if (jwt.payload.ath === undefined) note(bad, hits, r, `${r.method} ${r.path}: a token was sent with no ath`);
+        else if (jwt.payload.ath !== want) note(bad, hits, r, `${r.method} ${r.path}: ath is not the hash of the token sent`);
       }
-      return bad.length ? FAIL("ath did not match the access token on the request", bad.slice(0, 3))
+      return bad.length ? FAIL("ath did not match the access token on the request", bad.slice(0, 3), hits)
                         : PASS(`ath matched the access token on all ${s.length} request(s)`);
     },
   },
@@ -508,7 +519,7 @@ export const CHECKS = [
       const dupes = resource.filter(r => r.sessionHeaderDuplicated);
       return dupes.length
         ? FAIL("a request carried more than one Poppy-Session header, so no single JWT signs it",
-               dupes.slice(0, 3).map(r => `${r.method} ${r.path}`))
+               dupes.slice(0, 3).map(r => `${r.method} ${r.path}`), dupes)
         : PASS(`every one of ${resource.length} resource request(s) carried a single Session header`);
     },
   },
@@ -526,7 +537,7 @@ export const CHECKS = [
       const leaked = docs.filter(r => r.sessionHeaderCount > 0);
       return leaked.length
         ? FAIL("a Session JWT was sent to a destination 5.2 forbids",
-               leaked.slice(0, 3).map(r => `${r.method} ${r.path} (${r.classifiedAs})`))
+               leaked.slice(0, 3).map(r => `${r.method} ${r.path} (${r.classifiedAs})`), leaked)
         : PASS(`no Session JWT went to any of the ${docs.length} document or OAuth request(s) seen`);
     },
   },
@@ -543,7 +554,7 @@ export const CHECKS = [
       const none = s.filter(x => !decodeJwt(x.jwt.header.poppy_dlg));
       return none.length
         ? FAIL("a Session JWT carried no delegation in its poppy_dlg header",
-               none.slice(0, 3).map(x => `${x.r.method} ${x.r.path}`))
+               none.slice(0, 3).map(x => `${x.r.method} ${x.r.path}`), none.map(x => x.r))
         : PASS(`every one of ${s.length} Session JWT(s) carried a delegation`);
     },
   },
@@ -561,7 +572,7 @@ export const CHECKS = [
       const bad = dlgs.filter(d => !allowed.has(d.header?.alg));
       return bad.length
         ? FAIL("a delegation was signed with an algorithm 1.0 does not define for one",
-               [...new Set(bad.map(d => String(d.header?.alg)))].slice(0, 3))
+               [...new Set(bad.map(d => String(d.header?.alg)))].slice(0, 3), sessionRequests(log).map(x => x.r))
         : PASS(`every delegation used ES256 or PS384 across ${dlgs.length} delegation(s)`);
     },
   }
@@ -597,12 +608,16 @@ export const PAIRWISE = [
     section: "5.1",
     quote: "It is opaque and different for each Company, so Companies can't match Users with each other.",
     run(a, b, ctxA, ctxB) {
-      if (!ctxA?.identifier || !ctxB?.identifier) return SKIP("both Company identifiers are needed to judge this");
+      if (!ctxA?.identifier || !ctxB?.identifier) return SKIP("both Company identifiers are needed to judge this", "grader");
       if (ctxA.identifier === ctxB.identifier)
-        return SKIP(`both Companies are ${ctxA.identifier}, which 3.2 makes one Company, so the same User ID is required`);
+        return SKIP(`both Companies are ${ctxA.identifier}, which 3.2 makes one Company, so the same User ID is required`, "grader");
       const subs = l => new Set(sessionRequests(l).map(x => x.jwt.payload.sub).filter(Boolean));
       const A = subs(a), B = subs(b);
-      if (!A.size || !B.size) return SKIP("the agent did not send a Session to both Companies");
+      // Naming both Companies and the counts, because "did not send a Session to both" does
+      // not tell a builder which one to drive next.
+      if (!A.size || !B.size) return SKIP(
+        `the agent did not send a Session to both Companies: ${sessionRequests(a).length} request(s) with a Session header at `
+        + `${ctxA.identifier} and ${sessionRequests(b).length} at ${ctxB.identifier}`);
       const shared = [...A].filter(s => B.has(s));
       return shared.length
         ? FAIL(`the same User ID was used at ${ctxA.identifier} and ${ctxB.identifier}, which lets them match the User`,
@@ -617,20 +632,21 @@ export const PAIRWISE = [
     // claim's format and said nothing about reuse.
     quote: "The Personal Agent MUST use each delegated key, and its delegation, for one User ID only: it signs with it only that User ID's Session JWTs.",
     run(a, b, ctxA, ctxB) {
-      if (!ctxA?.identifier || !ctxB?.identifier) return SKIP("both Company identifiers are needed to judge this");
+      if (!ctxA?.identifier || !ctxB?.identifier) return SKIP("both Company identifiers are needed to judge this", "grader");
       if (ctxA.identifier === ctxB.identifier)
-        return SKIP(`both Companies are ${ctxA.identifier}, which 3.2 makes one Company`);
+        return SKIP(`both Companies are ${ctxA.identifier}, which 3.2 makes one Company`, "grader");
       const dlgsOf = l => sessionRequests(l).map(x => decodeJwt(x.jwt.header.poppy_dlg)).filter(Boolean);
       const A = dlgsOf(a), B = dlgsOf(b);
-      if (!A.length || !B.length) return SKIP("the agent did not send a delegation to both Companies");
+      if (!A.length || !B.length) return SKIP(
+        `the agent did not send a delegation to both Companies: ${A.length} at ${ctxA.identifier} and ${B.length} at ${ctxB.identifier}`);
       const keys = ds => new Set(ds.map(d => thumbprintOf(d.payload?.cnf?.jwk)).filter(Boolean));
       const jtis = ds => new Set(ds.map(d => d.payload?.jti).filter(Boolean));
       const kA = keys(A), kB = keys(B);
-      if (!kA.size || !kB.size) return SKIP("a delegation carried no usable cnf.jwk, so keys cannot be compared");
+      if (!kA.size || !kB.size) return SKIP("a delegation carried no usable cnf.jwk, so keys cannot be compared", "grader");
       const sharedKey = [...kA].filter(k => kB.has(k));
       // 1.0 names the delegation's jti as the same linking vector as the key thumbprint.
       const sharedJti = [...jtis(A)].filter(j => jtis(B).has(j));
-      const bad = [];
+      const bad = []; const hits = [];
       if (sharedKey.length) bad.push(`${sharedKey.length} delegated key(s) in common`);
       if (sharedJti.length) bad.push(`${sharedJti.length} delegation jti(s) in common`);
       return bad.length
@@ -641,8 +657,8 @@ export const PAIRWISE = [
 ];
 
 export function grade(log, ctx) {
-  return CHECKS.map(c => ({ id: c.id, quote: c.quote, ...c.run(log, ctx) }));
+  return CHECKS.map(c => ({ id: c.id, section: c.section, quote: c.quote, ...c.run(log, ctx) }));
 }
 export function gradePair(logA, logB, ctxA, ctxB) {
-  return PAIRWISE.map(c => ({ id: c.id, quote: c.quote, ...c.run(logA, logB, ctxA, ctxB) }));
+  return PAIRWISE.map(c => ({ id: c.id, section: c.section, quote: c.quote, ...c.run(logA, logB, ctxA, ctxB) }));
 }

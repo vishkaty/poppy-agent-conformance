@@ -58,6 +58,34 @@ serve, because the specification's own example spreads conversations and an MCP 
 across hosts, and a grader that silently cannot see them would report a partial run as a
 complete one.
 
+## The report
+
+`report.mjs` builds what a builder reads. Two outputs from one pure function: an object for
+diffing two runs after a fix, and a single self contained HTML file for reading, with no
+script, no external resource and no dependency.
+
+Its failure modes are not the checks'. Two matter, and the design is shaped by them.
+
+It must not leak a secret while reporting on one. Signatures, access tokens, cookies,
+bodies and unknown header values never appear; a private key member inside a delegation is
+named and its length given, never its value. Headers are an allowlist, because the next
+header somebody invents could hold anything. What identifies a request after redaction is
+its ordinal, host, method, path, time, the Session `jti`, and a body hash, which is enough
+for a builder to find it in their own logs. A test fills a run with unique sentinels and
+requires that none of them, and no compact JWT at all, appears in either output.
+
+And an abstention must never read as a failure. Three verdicts, three unrelated words, and
+two different labels for abstaining: not reached by your agent, which the builder can
+change, and not judged by this grader, which they cannot. Failures come first because that
+is what a builder arrived to find, abstentions second because they are the other thing they
+can act on, passes last and collapsed because nothing follows from one. Every abstention
+carries a sentence saying what to do differently to reach that rule, and the rules this
+grader cannot offer at all say so as our limit rather than their omission.
+
+Every failure names the rule, quotes the sentence of 1.0 it enforces, links the section, and
+names the request that decided it. A test requires that of every check, because a failure a
+builder cannot trace to a request is one they have to ask us about.
+
 ## Running it
 
 ```sh
@@ -169,7 +197,7 @@ than a citation.
 
 ## Status
 
-Early. Twenty four checks and 92 tests. It has been run against synthetic traffic and against a
+Early. Twenty four checks and 116 tests. It has been run against synthetic traffic and against a
 Company of our own on two public hostnames. It has not yet been run against a third party
 agent, and no verdict about anyone else software has been published from it.
 
