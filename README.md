@@ -206,6 +206,19 @@ egress address, which a tunnel otherwise conceals. The address checks stop it re
 internal; they do nothing about that. Decide whether to route these fetches through an egress
 you are willing to expose before the first public run with it enabled.
 
+It also puts the public hostname in the path of granting any lease at all, because the canary
+fetches its own published identity through it. That is the right direction, since a grader that
+cannot fetch should not be verifying, but it means an outage of whatever serves the hostname
+stops grading rather than degrading it.
+
+Measured with it on, against a deployment behind a tunnel at a real hostname: a delegation
+signed by the key published at the agent's `jwks_uri` is answered 200, and a delegation signed
+by a key published nowhere, claiming the same `client_id`, is answered
+`400 {"error": "invalid_session", "error_description": "delegation.signature: a delegation was
+not signed by a key the agent published"}`. The authors own kit validator, which hosts its test
+agent identity on this Company, reports both of its delegation checks passing where it had two
+warnings before.
+
 ## A run
 
 `rig.mjs` is how a builder actually uses this. It stands up two Companies, because several
