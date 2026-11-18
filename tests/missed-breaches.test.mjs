@@ -98,3 +98,38 @@ test("a conforming ath is accepted", async () => {
   const v = grade([r], f.ctx).find(x => x.id === "session.ath");
   assert.equal(v.verdict, "PASS", `a correct ath was rejected: ${v.why}`);
 });
+
+test("a delegation signed with an algorithm 1.0 does not allow is caught", async () => {
+  // 5.2: "`alg` is `ES256` or `PS384`." Nothing checked the delegation's own algorithm, so
+  // a delegation signed RS256 passed, which is neither of the two a Company must accept.
+  const rsa = await generateKeyPair("RS256", { extractable: true });
+  const dlg = await new SignJWT({
+    iss: f.CLIENT_ID, iat: Math.floor(Date.now() / 1000),
+    exp: Math.floor(Date.now() / 1000) + 3600, jti: randomUUID(), cnf: { jwk: keys.jwk },
+  }).setProtectedHeader({ alg: "RS256", typ: "poppy-delegation+jwt" }).sign(rsa.privateKey);
+  const r = await f.request(keys, { dlgCompact: dlg });
+  assert.ok(failed([r]).includes("delegation.alg"), `FAILs were ${failed([r]).join(", ") || "none"}`);
+});
+
+test("a PS384 delegation is accepted, because a Company MUST accept one", async () => {
+  // The control for the check above. 5.2: "Companies MUST accept delegations signed with
+  // `ES256` and with `PS384`. `PS384` lets a Personal Agent have its delegations signed
+  // blindly (10.7)." Failing one would fail a conforming agent using blind signing.
+  const rsa = await generateKeyPair("PS384", { extractable: true });
+  const now = Math.floor(Date.now() / 1000);
+  const dlg = await new SignJWT({
+    iss: f.CLIENT_ID, iat: now, exp: now + 3600, jti: randomUUID(), cnf: { jwk: keys.jwk },
+  }).setProtectedHeader({ alg: "PS384", typ: "poppy-delegation+jwt" }).sign(rsa.privateKey);
+  const r = await f.request(keys, { dlgCompact: dlg });
+  const v = grade([r], f.ctx).find(x => x.id === "delegation.alg");
+  assert.equal(v.verdict, "PASS", `a PS384 delegation was rejected: ${v.why}`);
+});
+
+test("a Session JWT with no delegation is reported under its own rule", async () => {
+  // It was reported as a typ failure, which is a misattribution: the defect is that no
+  // delegation was sent at all, and 5.2 has its own sentence for it.
+  const r = await f.request(keys, { noDlg: true });
+  const ids = failed([r]);
+  assert.ok(ids.includes("delegation.present"), `FAILs were ${ids.join(", ") || "none"}`);
+  assert.ok(!ids.includes("delegation.typ"), "absence must not be reported as a wrong typ");
+});

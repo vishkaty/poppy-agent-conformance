@@ -88,6 +88,15 @@ const BREACH = {
   "delegation.iss-matches": async () =>
     [await f.request(keys, { dlgCompact: await f.delegation(keys, { payload: { iss: "https://other.example/agent.json" } }) })],
   "session.ath": async () => [await f.request(keys, { token: "tok-x", ath: "not-the-hash" })],
+  "delegation.present": async () => [await f.request(keys, { noDlg: true })],
+  "delegation.alg": async () => {
+    const rsa = await generateKeyPair("RS256", { extractable: true });
+    const now = Math.floor(Date.now() / 1000);
+    const dlg = await new SignJWT({ iss: f.CLIENT_ID, iat: now, exp: now + 3600,
+      jti: randomUUID(), cnf: { jwk: keys.jwk } })
+      .setProtectedHeader({ alg: "RS256", typ: "poppy-delegation+jwt" }).sign(rsa.privateKey);
+    return [await f.request(keys, { dlgCompact: dlg })];
+  },
   "session.not-on-documents": async () => {
     // The agent sending its Session JWT to poppy.json, which 5.2 forbids outright.
     const r = await f.request(keys, { path: "/.well-known/poppy.json" });

@@ -89,7 +89,9 @@ test("the README states the real number of checks", () => {
   // standing, and the count drifted once already: it was written before the number was
   // verified. The suite owns it now.
   const readme = readFileSync(join(HERE, "../README.md"), "utf8");
-  const words = { 20: "Twenty", 21: "Twenty one", 22: "Twenty two", 23: "Twenty three", 24: "Twenty four" };
+  const words = { 18: "Eighteen", 19: "Nineteen", 20: "Twenty", 21: "Twenty one",
+                  22: "Twenty two", 23: "Twenty three", 24: "Twenty four",
+                  25: "Twenty five", 26: "Twenty six" };
   const total = CHECKS.length + PAIRWISE.length;
   assert.ok(readme.includes(`${words[total]} checks over a recorded request log`),
     `the README does not say "${words[total]} checks over a recorded request log" for ${total} checks`);

@@ -289,7 +289,10 @@ export const CHECKS = [
         if (!dlg) { none.push(`${r.method} ${r.path}`); continue; }
         if (dlg.header.typ !== "poppy-delegation+jwt") bad.push(`${r.method} ${r.path}: ${JSON.stringify(dlg.header.typ)}`);
       }
-      if (none.length) return FAIL("a Session JWT carried no delegation in its poppy_dlg header", none.slice(0, 3));
+      // Absence has its own check, delegation.present. Reporting it here was a
+      // misattribution: the defect is that no delegation was sent at all, and 5.2 has its
+      // own sentence for that.
+      if (none.length && !bad.length) return SKIP("no delegation was sent, which delegation.present reports");
       return bad.length ? FAIL("a delegation did not declare poppy-delegation+jwt", bad.slice(0, 3))
                         : PASS("every Session JWT carried a delegation declaring poppy-delegation+jwt");
     },
@@ -525,6 +528,41 @@ export const CHECKS = [
         ? FAIL("a Session JWT was sent to a destination 5.2 forbids",
                leaked.slice(0, 3).map(r => `${r.method} ${r.path} (${r.classifiedAs})`))
         : PASS(`no Session JWT went to any of the ${docs.length} document or OAuth request(s) seen`);
+    },
+  },
+  {
+    id: "delegation.present",
+    section: "5.2",
+    quote: "the Company MUST reject, with `invalid_session`, a Session JWT without a delegation, including one signed directly with a key from `jwks_uri`",
+    // Its own rule, because a missing delegation is not a wrong typ. A Session JWT signed
+    // directly with a jwks_uri key is the specific case the sentence names, and it looks
+    // valid in every other respect.
+    run(log) {
+      const s = sessionRequests(log);
+      if (!s.length) return SKIP("no Session header was sent");
+      const none = s.filter(x => !decodeJwt(x.jwt.header.poppy_dlg));
+      return none.length
+        ? FAIL("a Session JWT carried no delegation in its poppy_dlg header",
+               none.slice(0, 3).map(x => `${x.r.method} ${x.r.path}`))
+        : PASS(`every one of ${s.length} Session JWT(s) carried a delegation`);
+    },
+  },
+  {
+    id: "delegation.alg",
+    section: "5.2",
+    quote: "`alg` is `ES256` or `PS384`. Companies MUST accept delegations signed with `ES256` and with `PS384`.",
+    // Exactly those two and no others. PS384 must PASS: it is how a delegation is signed
+    // blindly (10.7), so failing it would fail a conforming agent that protects its users
+    // from its own operator.
+    run(log) {
+      const dlgs = sessionRequests(log).map(x => decodeJwt(x.jwt.header.poppy_dlg)).filter(Boolean);
+      if (!dlgs.length) return SKIP("no delegation was sent");
+      const allowed = new Set(["ES256", "PS384"]);
+      const bad = dlgs.filter(d => !allowed.has(d.header?.alg));
+      return bad.length
+        ? FAIL("a delegation was signed with an algorithm 1.0 does not define for one",
+               [...new Set(bad.map(d => String(d.header?.alg)))].slice(0, 3))
+        : PASS(`every delegation used ES256 or PS384 across ${dlgs.length} delegation(s)`);
     },
   }
 ];
