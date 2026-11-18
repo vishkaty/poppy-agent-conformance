@@ -328,6 +328,28 @@ destination answered 404, telling an agent its endpoint was wrong when it was no
 In the other direction, our rules caught every breach their validator sent: thirteen failures,
 each matching one of its probes, and no conforming request failed.
 
+## Keeping up with the specification
+
+```sh
+npm run spec-status
+```
+
+It reads the authors own published version index and answers three questions. Is the version
+in `spec/` still published, and are its page hashes still the ones we recorded. Is there a
+newer published version. And is there a draft in progress.
+
+The first of those is the one that matters, and it exits non zero. A published version is
+frozen, so a page hash that moved would mean every quote in `checks.mjs` is a quote of text the
+specification no longer has, while the suite stayed green, because the suite checks our quotes
+against our own copy. A newer published version is reported and does not fail: verdicts here
+are still true about the version they name, and adopting a new one is a decision for a person.
+
+A draft is not a newer version for this purpose. It has no published date and no hashes, it can
+change under its own number, and in this protocol one draft did that three times in a week.
+Nothing is captured from a draft as though it were frozen.
+
+As of the last run: published 1.0 unchanged and current, with 1.1 in progress.
+
 ## The copy of the specification in spec/
 
 Published 1.0, frozen by the authors on 2026-11-14, captured from their repository at one

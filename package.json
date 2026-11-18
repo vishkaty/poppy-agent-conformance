@@ -11,7 +11,8 @@
   "scripts": {
     "test": "node --experimental-strip-types --test \"tests/**/*.test.mjs\"",
     "start": "node --experimental-strip-types grade.mjs",
-    "killtest": "node tools/killtest.mjs"
+    "killtest": "node tools/killtest.mjs",
+    "spec-status": "node tools/spec-status.mjs"
   },
   "dependencies": {
     "jose": "^6.2.12"
