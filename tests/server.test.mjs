@@ -144,3 +144,47 @@ test("a destination on another origin is reported, because no rule can examine i
   assert.ok(warnings.some(w => /api\.example\.com/.test(w)),
     `a destination this grader cannot see was not reported: ${JSON.stringify(warnings)}`);
 });
+
+test("a target with dot segments is refused and recorded, not served under one path and classified under another", async () => {
+  // Node hands the raw target to the server while new URL() resolves dot segments, so
+  // /poppy/conversations/../token is served as one path and classified as another. That
+  // disagreement is how a request reaches a destination while being judged as something
+  // else, so it is refused rather than reconciled.
+  await withGrader(async (g, port) => {
+    await new Promise(resolve => {
+      const s = connect(port, "127.0.0.1", () => {
+        s.write("GET /poppy/conversations/../token HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+        setTimeout(() => { s.destroy(); resolve(); }, 250);
+      });
+      s.on("error", resolve);
+    });
+    await new Promise(r => setTimeout(r, 150));
+    const r = g.records.find(x => String(x.rawTarget ?? "").includes(".."));
+    assert.ok(r, "a dot-segment target was not recorded");
+    assert.equal(r.refused, true, "a dot-segment target must be refused, not served");
+    assert.equal(r.isResource, false);
+  });
+});
+
+test("a backslash in the target is refused the same way", async () => {
+  await withGrader(async (g, port) => {
+    await new Promise(resolve => {
+      const s = connect(port, "127.0.0.1", () => {
+        s.write("GET /poppy\\\\conversations HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+        setTimeout(() => { s.destroy(); resolve(); }, 250);
+      });
+      s.on("error", resolve);
+    });
+    await new Promise(r => setTimeout(r, 150));
+    const r = g.records.find(x => String(x.rawTarget ?? "").includes("\\"));
+    assert.ok(r && r.refused, "a backslash target was not refused and recorded");
+  });
+});
+
+test("a normal target is not refused", async () => {
+  // The control: if everything were refused, the two tests above would prove nothing.
+  await withGrader(async (g, port) => {
+    await fetch(`${base(port)}/v1/orders`);
+    assert.notEqual(g.records.at(-1).refused, true);
+  });
+});

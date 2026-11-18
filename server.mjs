@@ -53,7 +53,25 @@ export function createGrader(cfg) {
     // long poll or a slow upload would otherwise show up as clock skew in the agent's iat.
     const at = Math.floor(Date.now() / 1000);
 
+    // A target containing dot segments or a backslash is refused rather than reconciled.
+    // Node hands the raw target to the router while new URL() resolves dot segments, so
+    // /poppy/conversations/../token would be served as one path and classified as another,
+    // and that disagreement is how a request reaches a destination while being judged as
+    // something else.
+    const rawTarget = String(req.url ?? "/");
+    const unsafe = /(^|\/)\.\.?(\/|$)/.test(rawTarget) || rawTarget.includes("\\");
+
     const record = recordOf(req, config, { at, body: null, bodyComplete: true });
+    record.rawTarget = rawTarget;
+    if (unsafe) {
+      record.refused = true;
+      record.isResource = false; record.isPage = false; record.mustNotCarry = false;
+      record.classifiedAs = "refused: the target has dot segments or a backslash, so routing and classification could disagree";
+      records.push(record);
+      res.writeHead(400, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "invalid_request" }));
+      return;
+    }
     // Push now, so an abort cannot lose it. The body is filled in below, in place.
     records.push(record);
 
