@@ -445,9 +445,35 @@ export const CHECKS = [
     },
   },
   {
-    id: "version.constant",
+    id: "version.sent",
     section: "3.4",
     quote: "On every request with the Session header (5.2), the Personal Agent sends the protocol version it implements, compatible with the chosen one, in `Poppy-Version`, as `major.minor`.",
+    // The per-request half of the version rule, and the half a Company acts on. 3.4: "An
+    // endpoint that verifies the Session header (5.3) MUST also check `Poppy-Version`. It
+    // rejects a request without it, or with a version that isn't compatible with one the
+    // Company serves, with `version_unsupported`". Compatibility is defined in the same
+    // section: "Two versions are compatible when they have the same major version."
+    run(log, ctx) {
+      const withHeader = sessionRequests(log).filter(x => x.r.isResource);
+      if (!withHeader.length) return SKIP("no request to a resource endpoint carried a Session header");
+      const served = String(ctx?.protocolVersion ?? "1.0").split(".")[0];
+      const bad = [], hits = [];
+      for (const { r } of withHeader) {
+        const v = r.headers?.["poppy-version"];
+        if (v === undefined || v === "") { note(bad, hits, r, `${r.method} ${r.path}: no Poppy-Version`); continue; }
+        if (!/^\d+\.\d+$/.test(String(v))) { note(bad, hits, r, `${r.method} ${r.path}: ${JSON.stringify(v)} is not major.minor`); continue; }
+        if (String(v).split(".")[0] !== served)
+          note(bad, hits, r, `${r.method} ${r.path}: ${JSON.stringify(v)} is not compatible with ${served}.x, which this Company serves`);
+      }
+      return bad.length
+        ? FAIL("a request with the Session header carried no compatible Poppy-Version", [...new Set(bad)].slice(0, 3), hits)
+        : PASS(`every one of ${withHeader.length} Session request(s) carried a compatible Poppy-Version`);
+    },
+  },
+  {
+    id: "version.constant",
+    section: "3.4",
+    quote: "The Personal Agent MUST send the same values on every request in a Session, and starts a new Session to change them.",
     // The quote here was a placeholder for an hour: a real sentence about
     // `supported_versions` URLs, which is a different rule in the same section. The verbatim
     // test PASSED it, because the sentence exists. That is the gap the register warned about
@@ -463,9 +489,13 @@ export const CHECKS = [
       // permits "several Sessions for the same User, for example for tasks running in
       // parallel", and 3.4's recovery has the agent pick another version and start a new
       // Session. Requiring one value across the whole log failed both of those.
+      //
+      // Presence is NOT judged here. It was, and that made this rule non-monotone: a request
+      // carrying no Poppy-Version failed when it was alone and passed when another Session in
+      // the same run had carried the header, so an agent that never sent it on one of its
+      // Sessions was told it conformed. Presence is per request, has its own error in 3.4,
+      // and is now version.sent.
       const withHeader = sessionRequests(log).filter(x => x.r.isResource);
-      const any = resource.filter(r => r.headers?.["poppy-version"]);
-      if (!any.length) return FAIL("no request carried a Poppy-Version header", [], resource);
       // The FIRST request carrying each distinct value, per Session. Naming every request in
       // the Session was not wrong, since they are all in the Session that breached, but
       // against a long run it named 29 of 37 and left the builder to find the change
@@ -479,7 +509,17 @@ export const CHECKS = [
         if (!e.has(v)) e.set(v, r);                  // first sighting of this value
       }
       if (!bySid.size) return SKIP("no request carried both a Session header and a sid");
+      // Nothing could change inside a Session of one request, so a pass would be a claim
+      // about nothing: the same defect that was fixed in session.sub-stable and
+      // session.jti-unique, left behind here until a property over all three caught it.
+      const counts = new Map();
+      for (const { r, jwt } of withHeader) {
+        const sid = jwt.payload.sid;
+        if (sid !== undefined) counts.set(sid, (counts.get(sid) ?? 0) + 1);
+      }
       const mixed = [...bySid].filter(([, v]) => v.size > 1);
+      if (!mixed.length && ![...counts.values()].some(n => n > 1))
+        return SKIP("no Session carried two requests, so nothing could change within one");
       return mixed.length
         ? FAIL("Poppy-Version changed within one Session",
                mixed.map(([sid, v]) => `sid ${String(sid).slice(0, 12)}: ${[...v.keys()].join(", ")}`).slice(0, 3),

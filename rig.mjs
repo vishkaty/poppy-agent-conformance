@@ -33,7 +33,7 @@ export const CANARY_RULES = [
   "session.signature", "session.header-single", "session.not-on-documents",
   "delegation.present", "delegation.typ", "delegation.alg", "delegation.exp-24h",
   "delegation.not-expired", "delegation.iss-matches", "delegation.no-identifiers",
-  "delegation.no-private-key", "version.constant",
+  "delegation.no-private-key", "version.constant", "version.sent",
   "pairwise.user-id", "pairwise.delegated-key",
 ];
 export const CANARY_EXCLUDED = {

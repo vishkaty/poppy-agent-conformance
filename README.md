@@ -9,7 +9,7 @@ Personal Agent puts on the wire, which only the Company it is talking to can see
 
 ## What it does
 
-Twenty four checks over a recorded request log. Twenty two need one Company. Two need
+Twenty five checks over a recorded request log. Twenty three need one Company. Two need
 two Companies, because the rules they test are pairwise: a User ID must differ per Company
 (spec 5.1) and a delegated key must sign for one User ID only (spec 5.2), so no single
 Company can observe either.
@@ -374,7 +374,7 @@ than a citation.
 
 Early, and honest about what has been measured.
 
-Twenty four rules, and twenty two mutations that each break one guard and require a named test
+Twenty five rules, and twenty two mutations that each break one guard and require a named test
 to notice. The test count is deliberately not quoted here: it went stale twice in one day, and
 `npm test` prints it. It has been run against synthetic traffic, against traffic minted by the
 authors own signing code, and end to end through a tunnel at a real hostname on 443, where a

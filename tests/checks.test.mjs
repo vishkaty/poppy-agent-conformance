@@ -11,109 +11,10 @@
 // suite rather than quietly adding a green light.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { generateKeyPair, SignJWT, exportJWK } from "jose";
-import { randomUUID } from "node:crypto";
 import { CHECKS, PAIRWISE, grade, gradePair } from "../checks.mjs";
 import * as f from "./fixture.mjs";
 
-// Two genuinely different Companies, which is what makes a pairwise verdict meaningful.
-const CTX_A = { identifier: "https://shop.example/poppy", domain: "shop.example" };
-const CTX_B = { identifier: "https://other-shop.example/poppy", domain: "other-shop.example" };
-
-const keys = await f.agentKeys();
-const conforming = await f.conformingLog(keys);
-
-// One breach per check. Each returns a log that must fail exactly that check.
-const BREACH = {
-  "session.header-sent":        async () => [await f.request(keys, { noSession: true })],
-  "session.typ":                async () => [await f.request(keys, { sesTyp: "JWT" })],
-  "session.alg": async () => {
-    // Signed with RS256, which 5.2 forbids: "alg MUST be ES256". Built with a real RSA key
-    // rather than by editing the header, so the JWT is one an agent could actually send.
-    const rsa = await generateKeyPair("RS256", { extractable: true });
-    const dlg = await f.delegation(keys);
-    const jwt = await new SignJWT({
-      iss: f.CLIENT_ID, aud: f.IDENTIFIER, sid: "s", sub: "u",
-      htm: "GET", htu: "https://shop.example/poppy/orders",
-      iat: Math.floor(Date.now() / 1000), jti: randomUUID(),
-    }).setProtectedHeader({ alg: "RS256", typ: "poppy-session+jwt", poppy_dlg: dlg })
-      .sign(rsa.privateKey);
-    const r = await f.request(keys, {});
-    r.headers["poppy-session"] = jwt;
-    return [r];
-  },
-  "session.aud":                async () => [await f.request(keys, { aud: "https://elsewhere.example/poppy" })],
-  "session.htm-htu":            async () => [await f.request(keys, { htu: "https://shop.example/poppy/elsewhere" })],
-  "session.iat-window":         async () => [await f.request(keys, { iat: Math.floor(Date.now() / 1000) - 600 })],
-  "session.claims-present":     async () => [await f.request(keys, { drop: ["jti"] })],
-  "session.sub-stable": async () => {
-    const sid = "sid-fixed", dlgCompact = await f.delegation(keys);
-    return [await f.request(keys, { sid, sub: "user-a", dlgCompact }),
-            await f.request(keys, { sid, sub: "user-b", dlgCompact })];
-  },
-  "session.jti-unique": async () => {
-    // One jti signing two DIFFERENT requests, which cannot be a retry. An identical resend
-    // is deliberately not a FAIL: 5.3 leaves rejecting a reused jti to the Company.
-    const jti = "reused-" + randomUUID();
-    return [await f.request(keys, { jti, path: "/poppy/orders" }),
-            await f.request(keys, { jti, path: "/poppy/orders/2" })];
-  },
-  "delegation.typ":             async () => [await f.request(keys, { dlg: { typ: "JWT" } })],
-  "delegation.exp-24h": async () => {
-    const iat = Math.floor(Date.now() / 1000);
-    return [await f.request(keys, { dlg: { iat, exp: iat + 86400 + 60 } })];
-  },
-  "delegation.no-identifiers": async () => {
-    // the delegation naming the User ID, which 5.2 forbids outright
-    const sub = "user-leaked-" + randomUUID();
-    const dlgCompact = await f.delegation(keys, { payload: { note: sub } });
-    return [await f.request(keys, { sub, dlgCompact })];
-  },
-  "version.constant":           async () => [await f.request(keys, { version: null })],
-  "session.signature": async () => {
-    const r = await f.request(keys, {});
-    const parts = r.headers["poppy-session"].split(".");
-    parts[2] = "A".repeat(parts[2].length);        // the signature destroyed
-    r.headers["poppy-session"] = parts.join(".");
-    return [r];
-  },
-  "delegation.no-private-key": async () => {
-    const priv = await exportJWK(keys.delegated.privateKey);   // carries `d`
-    return [await f.request(keys, { dlgCompact: await f.delegation(keys, { payload: { cnf: { jwk: priv } } }) })];
-  },
-  "delegation.not-expired": async () => {
-    const now = Math.floor(Date.now() / 1000);
-    return [await f.request(keys, { dlgCompact: await f.delegation(keys, { iat: now - 7200, exp: now - 3600 }), at: now, iat: now })];
-  },
-  "delegation.iss-matches": async () =>
-    [await f.request(keys, { dlgCompact: await f.delegation(keys, { payload: { iss: "https://other.example/agent.json" } }) })],
-  "session.ath": async () => [await f.request(keys, { token: "tok-x", ath: "not-the-hash" })],
-  "delegation.present": async () => [await f.request(keys, { noDlg: true })],
-  "delegation.alg": async () => {
-    const rsa = await generateKeyPair("RS256", { extractable: true });
-    const now = Math.floor(Date.now() / 1000);
-    const dlg = await new SignJWT({ iss: f.CLIENT_ID, iat: now, exp: now + 3600,
-      jti: randomUUID(), cnf: { jwk: keys.jwk } })
-      .setProtectedHeader({ alg: "RS256", typ: "poppy-delegation+jwt" }).sign(rsa.privateKey);
-    return [await f.request(keys, { dlgCompact: dlg })];
-  },
-  "session.not-on-documents": async () => {
-    // The agent sending its Session JWT to poppy.json, which 5.2 forbids outright.
-    const r = await f.request(keys, { path: "/.well-known/poppy.json" });
-    r.isResource = false; r.mustNotCarry = true;
-    r.classifiedAs = "a discovery or description document, or an OAuth endpoint (5.2)";
-    r.sessionHeaderCount = 1;
-    return [r];
-  },
-  "session.header-single": async () => {
-    // What the recorder produces for two Poppy-Session headers: the value removed, because
-    // a joined pair is not a JWT, and the duplication flagged so the right rule fails.
-    const r = await f.request(keys, {});
-    delete r.headers["poppy-session"];
-    r.sessionHeaderDuplicated = true;
-    return [r];
-  },
-};
+import { BREACH, CTX_A, CTX_B, keys, conforming } from "./breaches.mjs";
 
 test("every check has a deliberate breach, so none can be a green light by omission", () => {
   const missing = CHECKS.map(c => c.id).filter(id => !BREACH[id]);
@@ -212,4 +113,15 @@ test("the signature check does not report verifying a signature it never verifie
   assert.match(v.why, /carried a delegation|no key to verify against/i, v.why);
   assert.equal(grade([await f.request(keys, {})], f.ctx).find(x => x.id === "session.signature").verdict,
     "PASS", "a real signature stopped being verified");
+});
+
+test("every historical rule abstains when no Session had two requests to compare", async () => {
+  // Stated as a property over all three, because fixing two of them and leaving the third is
+  // exactly what happened: version.constant still passed on a Session of one request, where
+  // "the same values on every request" cannot be observed at all.
+  const one = await f.request(keys, {});
+  for (const id of ["session.jti-unique", "session.sub-stable", "version.constant"]) {
+    const v = grade([one], f.ctx).find(x => x.id === id);
+    assert.equal(v.verdict, "INCONCLUSIVE", `${id} claimed something on one request: ${v.why}`);
+  }
 });
