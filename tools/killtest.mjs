@@ -30,7 +30,7 @@ import { dirname, join } from "node:path";
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const FILE = "tests/runs.test.mjs";
 
-const MUTATIONS = [
+export const MUTATIONS = [
   // the canary gate
   { id: "gate/public-route-arrival", file: "rig.mjs", kills: "a hostname routed to the wrong listener",
     find: "if (!arrived)", to: "if (false && !arrived)" },
@@ -87,12 +87,17 @@ const MUTATIONS = [
     find: "if (prefix && x.origin === parsed.origin && x.pathname.startsWith(prefix))", to: "if (false)" },
 ];
 
+// Imported for its MUTATIONS list by a test that owns the count in the README. Everything
+// below this line runs only when this file is the program.
+const RUNNING = process.argv[1] && process.argv[1].endsWith("killtest.mjs");
+
 const picked = process.argv[2]
   ? MUTATIONS.filter(m => m.id.includes(process.argv[2]))
   : MUTATIONS;
-if (picked.length === 0) { console.error(`no mutation matches ${process.argv[2]}`); process.exit(2); }
+if (RUNNING && picked.length === 0) { console.error(`no mutation matches ${process.argv[2]}`); process.exit(2); }
 
 const BACKUP = join(ROOT, ".killtest-backup.json");
+if (!RUNNING) { /* imported: stop here, run nothing, touch no file */ } else {
 
 // A mutation left behind by a crashed run would make every later number a statement about
 // that edit instead of about the code, so this runs before anything else.
@@ -168,3 +173,4 @@ for (const m of picked) {
 
 console.log(`\n${picked.length} mutations, ${survived} survived or hung, ${miscredited} miscredited or stale.`);
 process.exit(survived + miscredited > 0 ? 1 : 0);
+}

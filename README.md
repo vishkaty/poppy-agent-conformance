@@ -366,8 +366,9 @@ than a citation.
 
 Early, and honest about what has been measured.
 
-Twenty four rules, 161 tests, and 22 mutations that each break one guard and require a named
-test to notice. It has been run against synthetic traffic, against traffic minted by the
+Twenty four rules, and twenty two mutations that each break one guard and require a named test
+to notice. The test count is deliberately not quoted here: it went stale twice in one day, and
+`npm test` prints it. It has been run against synthetic traffic, against traffic minted by the
 authors own signing code, and end to end through a tunnel at a real hostname on 443, where a
 conforming agent reached 23 of the 24 rules and failed none. The one rule it did not reach is
 `session.ath`, which needs an access token this grader does not issue.

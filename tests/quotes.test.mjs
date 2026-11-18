@@ -84,6 +84,19 @@ test("no two checks enforce the same sentence", () => {
   assert.deepEqual(dupes, [], "checks sharing one sentence");
 });
 
+test("the README states the real number of mutations", async () => {
+  // Same reason as the check count below: a number in a public README that nobody owns drifts
+  // away from the code, and this one is a claim about how well tested the thing is.
+  const { MUTATIONS } = await import("../tools/killtest.mjs");
+  const readme = readFileSync(join(HERE, "../README.md"), "utf8");
+  const words = { 20: "twenty", 21: "twenty one", 22: "twenty two", 23: "twenty three",
+                  24: "twenty four", 25: "twenty five", 26: "twenty six" };
+  const n = MUTATIONS.length;
+  assert.ok(readme.toLowerCase().includes(`${words[n] ?? n} mutations`)
+            || readme.includes(`${n} mutations`),
+    `the README does not say "${words[n] ?? n} mutations" for ${n}`);
+});
+
 test("the README states the real number of checks", () => {
   // A public README that overstates its own coverage is the cheapest possible way to lose
   // standing, and the count drifted once already: it was written before the number was
