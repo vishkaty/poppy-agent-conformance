@@ -5,10 +5,12 @@
 // failures this file guards against are stamping the wrong time and never making a record
 // at all.
 import { createServer } from "node:http";
+import { decodeJwt } from "./checks.mjs";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { recordOf, classify, pathOf, allowedMethodsFor } from "./record.mjs";
+import { recordOf, classify, pathOf, allowedMethodsFor, conversationRouteOf } from "./record.mjs";
+import { createConversations } from "./conversations.mjs";
 import { resourceMetadataFor, authServerMetadataFor, authServerMetadataPath, discoveryFor,
          openapiFor, operationsToTemplates, DEFAULT_OPERATIONS, identifierOf,
          authServerEndpointsFor } from "./discovery.mjs";
@@ -112,6 +114,10 @@ export function createGrader(cfg) {
   // decline to retain one, which is how a bounded run is possible; the count of declined
   // records is kept HERE as well, because the whole point of this file is that a request
   // nothing recorded is a request no rule examines, and that must never be silent.
+  // Section 8 state, per Company. A conversation belongs to a client_id and a User ID and can
+  // outlast the Session that started it (8.2), so it is not per run; it is bounded instead.
+  const conversations = createConversations({ max: cfg.maxConversations ?? 200 });
+
   let seq = 0, dropped = 0;
   const push = (record) => {
     record.seq = ++seq;
@@ -313,6 +319,26 @@ export function createGrader(cfg) {
         record.rejection = { rule: "token.not-issued", error: c.body.error };
         answer(res, record, c.status, c.body, c.headers);
         return;
+      }
+
+      // A conversation route of 8.2. The route is parsed beside the classifier, so the thing
+      // that decides a request is a destination and the thing that decides which route it is
+      // cannot disagree.
+      const route = conversationRouteOf(record.url, record.method, config);
+      if (route) {
+        let body;
+        if (record.body !== null && record.body !== "") {
+          try { body = JSON.parse(record.body); }
+          catch { answer(res, record, 400, { error: "invalid_request",
+                    error_description: "every POST carries a JSON body (8.2)" }); return; }
+        } else if (route.route !== "events") {
+          body = undefined;                      // handled as a missing request id below
+        }
+        const outcome = conversations.handle(
+          { route: route.route, convId: route.id },
+          { jwt: decodeJwt(record.headers?.["poppy-session"]), body,
+            query: new URL(record.url).searchParams, path: record.path });
+        if (outcome) { answer(res, record, outcome.status, outcome.body); return; }
       }
 
       answer(res, record, 200, { ok: true });

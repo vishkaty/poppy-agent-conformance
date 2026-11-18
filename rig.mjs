@@ -105,8 +105,14 @@ async function driveCanary(graders, ports, collector, { publicBase, module: mod 
     const targets = [
       ...(op ? [{ method: "GET", path: op.template.replace(/\{[^}]*\}/g, "1") }] : []),
       ...(op ? [{ method: "GET", path: op.template.replace(/\{[^}]*\}/g, "2") }] : []),
+      // A conforming 8.3 body: a request `id`, which 8.2 requires of every POST, and a message
+      // with at least one of text, data, context or extensions, which 8.4 requires. It used to
+      // send neither, so this Company answered its own canary with 400 invalid_request once
+      // section 8 was implemented. The status guard in the gate is what caught it, which is the
+      // case that guard exists for: every rule passed and the answer was still an error.
       { method: "POST", path: new URL(d.agent.protocols.find(p => p.type === "poppy").endpoint).pathname,
-        body: JSON.stringify({ message: { content: [{ type: "text", text: "canary" }] } }) },
+        body: JSON.stringify({ id: `canary_${ref.randomId(8)}`,
+                               message: { author: { type: "agent" }, text: "canary check from the grader's own control" } }) },
     ];
     collector.intended[i] = targets.length;
 

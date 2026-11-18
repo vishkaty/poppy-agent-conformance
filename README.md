@@ -136,6 +136,36 @@ that need more than one request to decide, the one about documents, and the two 
 which are the most contestable accusations this grader makes and so are never used to close a
 door.
 
+## Enough of section 8 that an agent can finish a conversation
+
+Conversations are the protocol's main interface, and this Company used to answer a first
+message with `{"ok": true}`. An agent that gets that has no Conversation ID, so it cannot use
+the other five routes of 8.2 at all: the only agent that ever reached routes two to six here
+was the authors own validator, by inventing ids. So the threshold for being a useful target is
+exact, and it is now met: return a Conversation ID and remember it.
+
+`POST {endpoint}` answers 201 with a `conversation_id`, the other routes answer 202, and
+`GET {endpoint}/{id}/events` answers with the fields 8.5 names and the state 8.7 defines. A
+conversation belongs to the Personal Agent's `client_id` and the User ID that started it, so
+another User of the same agent and another agent entirely both get the same 404
+`conversation_not_found` that an unknown id gets, which 8.13 requires: "All return the same
+error." Request ids make a retry safe and a reused id with a different body a 409
+`request_id_conflict`. Closing twice is a 202 that changes nothing, and a closed conversation
+answers 409 `conversation_closed` to everything else.
+
+It is deliberately silent and immediate. It records what the agent sends, answers at once, and
+never leaves work pending, so `working` is always false by the time it answers. A handoff
+request is refused in a message, because 8.9 requires the Company to say why when nobody is
+available, and there is nobody here. Streaming (8.6, optional), Direct Conversations (8.10),
+sign-in during a conversation (8.11, there are no accounts) and `version_mismatch` (one version
+served) are out of scope and say so.
+
+Implementing it immediately caught something in our own control. The canary's conversation
+request carried no request `id` and used a `message.content` field 8.4 does not define, so this
+Company answered its own canary 400 `invalid_request`. The gate's status guard is what noticed,
+which is precisely the case it was added for: every rule passed and the answer was still an
+error.
+
 ## A run
 
 `rig.mjs` is how a builder actually uses this. It stands up two Companies, because several
@@ -432,7 +462,7 @@ than a citation.
 
 Early, and honest about what has been measured.
 
-Twenty five rules, and thirty one mutations that each break one guard and require a named test
+Twenty five rules, and forty five mutations that each break one guard and require a named test
 to notice. The test count is deliberately not quoted here: it went stale twice in one day, and
 `npm test` prints it. It has been run against synthetic traffic, against traffic minted by the
 authors own signing code, and end to end through a tunnel at a real hostname on 443, where a

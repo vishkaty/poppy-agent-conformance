@@ -172,6 +172,42 @@ export function sourceOf(req, cfg) {
   return req.socket?.remoteAddress ?? null;
 }
 
+// Which route of 8.2 this request is, if any.
+//
+// Beside the classifier on purpose. The classifier already decides that a path is a
+// conversation route; parsing WHICH route somewhere else would be two implementations of one
+// fact, and this file's header explains what that costs.
+const ROUTES = [
+  ["create", "POST", ""],
+  ["messages", "POST", "/{id}/messages"],
+  ["events", "GET", "/{id}/events"],
+  ["handoff", "POST", "/{id}/handoff"],
+  ["handoff-cancel", "POST", "/{id}/handoff/cancel"],
+  ["close", "POST", "/{id}/close"],
+];
+
+export function conversationRouteOf(url, method, cfg) {
+  const x = u(url);
+  if (!x) return null;
+  const origin = originOf(cfg.origin);
+  if (x.origin !== origin) return null;
+  const path = norm(x.pathname);
+  const m = String(method ?? "GET").toUpperCase();
+  for (const p of cfg.discovery?.agent?.protocols ?? []) {
+    if (p?.type !== "poppy" || !p.endpoint || originOf(p.endpoint) !== origin) continue;
+    const base = pathOf(p.endpoint);
+    for (const [route, wm, template] of ROUTES) {
+      if (m !== wm) continue;
+      if (!matchesTemplate(path, base + template)) continue;
+      // `/{id}/handoff/cancel` and `/{id}/handoff` are different lengths, so the template
+      // match already separates them; the id is the segment after the base.
+      const id = template ? norm(path).slice(norm(base).length + 1).split("/")[0] : null;
+      return { route, id: id ? decodeURIComponent(id) : null, base };
+    }
+  }
+  return null;
+}
+
 // The methods that would make this path a destination.
 //
 // 8.2 creates a conversation with POST, so a GET there is a method mismatch and not a missing
