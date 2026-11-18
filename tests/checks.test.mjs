@@ -180,3 +180,36 @@ test("every FAIL names at least one request that decided it", async () => {
   }
   assert.deepEqual(missing, [], `${missing.length} check(s) FAIL without naming a request`);
 });
+
+test("a verdict never claims to have compared what it could not compare", async () => {
+  // Three passes that were untrue on a single request. A builder reads "all 1 jti values were
+  // distinct" as conformance, when nothing was compared at all; and under a Company that
+  // rejects a bad request at once, every run would end with one request and print them.
+  // 5.2's sentences are about reuse and stability, which need two requests to observe.
+  const one = await f.request(keys, {});
+  for (const id of ["session.jti-unique", "session.sub-stable"]) {
+    const v = grade([one], f.ctx).find(x => x.id === id);
+    assert.equal(v.verdict, "INCONCLUSIVE", `${id} claimed a pass on one request: ${v.why}`);
+    assert.equal(v.cause, "unreached");
+    assert.match(v.why, /one request|nothing to compare|could change/i, `${id}: ${v.why}`);
+  }
+  // and with two they mean something again
+  const dlgCompact = await f.delegation(keys);
+  const two = [await f.request(keys, { sid: "s1", sub: "u1", dlgCompact }),
+               await f.request(keys, { sid: "s1", sub: "u1", dlgCompact })];
+  for (const id of ["session.jti-unique", "session.sub-stable"])
+    assert.equal(grade(two, f.ctx).find(x => x.id === id).verdict, "PASS",
+      `${id} abstains even when it had two requests to compare`);
+});
+
+test("the signature check does not report verifying a signature it never verified", async () => {
+  // It returned "every Session JWT verified against its delegation's key on 1 request(s)" for
+  // a JWT with no delegation, because there was no key to verify against and the loop skipped
+  // it. The verdict was harmless, since delegation.present fails, but the sentence was false,
+  // and a false sentence in a report is the thing this project spends most of its effort on.
+  const v = grade([await f.request(keys, { noDlg: true })], f.ctx).find(x => x.id === "session.signature");
+  assert.equal(v.verdict, "INCONCLUSIVE", `${v.verdict}: ${v.why}`);
+  assert.match(v.why, /carried a delegation|no key to verify against/i, v.why);
+  assert.equal(grade([await f.request(keys, {})], f.ctx).find(x => x.id === "session.signature").verdict,
+    "PASS", "a real signature stopped being verified");
+});

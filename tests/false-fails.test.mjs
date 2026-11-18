@@ -110,9 +110,12 @@ test("an upload that was reset and then retried identically is not a replay", as
   const retried = await f.request(keys, { method: "POST", path: "/poppy/conversations", jti,
                                           body: '{"message":{"content":[]}}' });
   const v = only([aborted, retried], "session.jti-unique");
-  assert.equal(v.verdict, "PASS", `${v.verdict}: ${v.why}`);
-  assert.match(v.why, /incomplete|never fully received|resend/i,
-    "the pass must say why the two bodies differ, or it hides a real replay");
+  // Not a FAIL is the point. It abstains rather than passing, because excluding the
+  // incomplete request leaves one request to compare and one request cannot show reuse:
+  // a pass there would be a claim about nothing.
+  assert.notEqual(v.verdict, "FAIL", `${v.verdict}: ${v.why}`);
+  assert.match(v.why, /never fully received/i,
+    "the verdict must say why a request was left out, or the abstention is unexplained");
 });
 
 test("a replay onto a genuinely different request is still a FAIL when one body is incomplete", async () => {
@@ -126,4 +129,47 @@ test("a replay onto a genuinely different request is still a FAIL when one body 
   const elsewhere = await f.request(keys, { method: "GET", path: "/poppy/invoices", jti });
   const v = only([aborted, other, elsewhere], "session.jti-unique");
   assert.equal(v.verdict, "FAIL", `${v.verdict}: ${v.why}`);
+});
+
+test("htu that differs only in percent encoding is not a mismatch", async () => {
+  // 5.3 step 2: "htm and htu match the request as RFC 9449 §4.3 describes for DPoP proofs".
+  // RFC 9449 §4.3 says the server SHOULD apply syntax-based normalization before comparing,
+  // which is RFC 3986 §6.2.2: percent-encoded octets of unreserved characters are decoded,
+  // and the hex digits of the rest are compared case-insensitively. An agent whose library
+  // writes `~` where a proxy writes `%7E`, or lowercase hex where ours is uppercase, was
+  // failed for a difference the referenced RFC says is none.
+  const cases = [
+    ["%7E decoded to ~", "/poppy/orders/%7Eid", "https://shop.example/poppy/orders/~id"],
+    ["~ left as ~", "/poppy/orders/~id", "https://shop.example/poppy/orders/%7Eid"],
+    ["hex case", "/poppy/orders/%2Fx", "https://shop.example/poppy/orders/%2fx"],
+    ["unreserved alpha", "/poppy/orders/%41", "https://shop.example/poppy/orders/A"],
+  ];
+  for (const [what, path, htu] of cases) {
+    const v = only([await f.request(keys, { path, htu })], "session.htm-htu");
+    assert.equal(v.verdict, "PASS", `${what}: ${v.verdict} ${v.why}`);
+  }
+  // and the control: a genuinely different path still fails
+  const bad = only([await f.request(keys, { path: "/poppy/orders", htu: "https://shop.example/poppy/elsewhere" })],
+                   "session.htm-htu");
+  assert.equal(bad.verdict, "FAIL", "a real htu mismatch stopped failing");
+});
+
+test("a typ naming the same media type the long way is not a failure", async () => {
+  // 5.2: "`typ` MUST be `poppy-session+jwt`... (RFC 8725 §3.11)". RFC 8725 builds on RFC 7515
+  // §4.1.9, where a `typ` with no slash is treated as though `application/` were prepended and
+  // media type names are case-insensitive, so `application/poppy-session+jwt` names exactly
+  // the same type. Failing it would be failing an agent over a spelling. The pass says the
+  // spelling differed, because a stricter Company may compare the literal.
+  for (const spelling of ["application/poppy-session+jwt", "POPPY-SESSION+JWT"]) {
+    const v = only([await f.request(keys, { sesTyp: spelling })], "session.typ");
+    assert.equal(v.verdict, "PASS", `${spelling}: ${v.verdict} ${v.why}`);
+    assert.match(v.why, /spelling|literal|exactly/i, `${spelling}: the pass does not mention the spelling`);
+  }
+  for (const spelling of ["application/poppy-delegation+jwt", "POPPY-DELEGATION+JWT"]) {
+    const v = only([await f.request(keys, { dlg: { typ: spelling } })], "delegation.typ");
+    assert.equal(v.verdict, "PASS", `${spelling}: ${v.verdict} ${v.why}`);
+  }
+  // controls: a genuinely different type still fails on both
+  assert.equal(only([await f.request(keys, { sesTyp: "JWT" })], "session.typ").verdict, "FAIL");
+  assert.equal(only([await f.request(keys, { dlg: { typ: "JWT" } })], "delegation.typ").verdict, "FAIL");
 });

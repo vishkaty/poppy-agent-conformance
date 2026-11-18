@@ -89,13 +89,42 @@ const SKIP = (why, cause = "unreached") => ({ verdict: "INCONCLUSIVE", why, caus
 // applies RFC 3986 normalization first, so https://host:443/p and https://HOST/p are the
 // same URI as https://host/p. Comparing raw strings reported both as mismatches. Trailing
 // slash and path case stay significant, which RFC 3986 also requires.
+// RFC 3986 section 6.2.2, which is the normalization RFC 9449 section 4.3 says to apply:
+// the hex digits of a percent-encoded octet are compared without regard to case, and an
+// octet encoding an UNRESERVED character is decoded. Reserved octets such as %2F are kept
+// encoded, because decoding one would change which path it is. Without this an agent whose
+// library writes `~` where a proxy writes `%7E` was failed for a difference the referenced
+// RFC says is none.
+const UNRESERVED = /^[A-Za-z0-9\-._~]$/;
+function normalizePath(path) {
+  return String(path).replace(/%([0-9A-Fa-f]{2})/g, (whole, hex) => {
+    const ch = String.fromCharCode(parseInt(hex, 16));
+    return UNRESERVED.test(ch) ? ch : `%${hex.toUpperCase()}`;
+  });
+}
+
 function normalizeUrl(raw) {
   let u;
   try { u = new URL(raw); } catch { return null; }
   if (!u.protocol || !u.host) return null;
-  return `${u.protocol.toLowerCase()}//${u.host.toLowerCase()}${u.pathname}`;   // URL drops a default port
+  return `${u.protocol.toLowerCase()}//${u.host.toLowerCase()}${normalizePath(u.pathname)}`;   // URL drops a default port
 }
 const htuOf = r => normalizeUrl(r.url);
+
+// Is this `typ` the media type 5.2 requires?
+//
+// 5.2 says "`typ` MUST be `poppy-session+jwt` ... (RFC 8725 §3.11)", and RFC 8725 builds on
+// RFC 7515 section 4.1.9, where a `typ` containing no slash is treated as though
+// `application/` were prepended, and media type names are compared without regard to case.
+// So `application/poppy-session+jwt` names exactly the same type as the literal. Failing an
+// agent over that would be failing it for a spelling, and a wrong FAIL is the most expensive
+// thing this instrument can produce. The spelling IS reported, because a stricter Company may
+// compare the literal and a builder should know.
+function typIs(value, want) {
+  if (typeof value !== "string") return { ok: false, exact: false };
+  const seen = value.toLowerCase().replace(/^application\//, "");
+  return { ok: seen === want, exact: value === want };
+}
 
 export const CHECKS = [
   {
@@ -119,9 +148,14 @@ export const CHECKS = [
     run(log) {
       const s = sessionRequests(log);
       if (!s.length) return SKIP("no Session header was sent");
-      const bad = s.filter(x => x.jwt.header.typ !== "poppy-session+jwt");
-      return bad.length
-        ? FAIL(`typ was not poppy-session+jwt`, [...new Set(bad.map(x => JSON.stringify(x.jwt.header.typ)))].slice(0, 3), bad.map(x => x.r))
+      const judged = s.map(x => ({ ...x, t: typIs(x.jwt.header.typ, "poppy-session+jwt") }));
+      const bad = judged.filter(x => !x.t.ok);
+      if (bad.length)
+        return FAIL(`typ was not poppy-session+jwt`,
+                    [...new Set(bad.map(x => JSON.stringify(x.jwt.header.typ)))].slice(0, 3), bad.map(x => x.r));
+      const loose = [...new Set(judged.filter(x => !x.t.exact).map(x => JSON.stringify(x.jwt.header.typ)))];
+      return loose.length
+        ? PASS(`every Session JWT named the media type poppy-session+jwt, but not with the exact spelling 5.2 gives: ${loose.slice(0, 2).join(", ")}. RFC 7515 makes these the same type; a Company that compares the literal would reject it`)
         : PASS("every Session JWT declared poppy-session+jwt");
     },
   },
@@ -249,6 +283,10 @@ export const CHECKS = [
       }
       const bad = [...bySid].filter(([, v]) => v.values.size > 1);
       if (!bySid.size) return SKIP("no sid was sent");
+      // The rule is about change WITHIN a Session, so a Session of one request cannot show
+      // it. "stable across 1 Session(s)" was a claim about nothing.
+      if (!bad.length && ![...bySid].some(([, v]) => v.requests.length > 1))
+        return SKIP("no Session carried two requests, so nothing could change within one");
       // Only the Sessions that changed. Naming every request meant a run with two Sessions,
       // one of them fine, pointed the builder at both.
       return bad.length
@@ -295,6 +333,14 @@ export const CHECKS = [
         return SKIP(incomplete
           ? `${incomplete} request(s) carried a jti but their bodies were never fully received, so none could be compared`
           : "no jti was sent");
+      // One comparable request cannot show reuse, so a pass here would be a claim about
+      // nothing. It read "all 1 jti values were distinct", which a builder reads as
+      // conformance, and under a Company that rejects a bad request at once every run would
+      // end with one request and print it.
+      const comparable = [...byJti].reduce((n, [, v]) => n + v.requests.length, 0);
+      if (comparable < 2)
+        return SKIP("only one request could be compared, so nothing could be reused"
+          + (incomplete ? `; ${incomplete} other request(s) were left out because the body was never fully received, which a reset upload and its retry look like` : ""));
       const replayed = [...byJti].filter(([, v]) => v.shapes.size > 1);
       const complete = s.length - incomplete;
       const note = incomplete
@@ -316,18 +362,22 @@ export const CHECKS = [
     run(log) {
       const s = sessionRequests(log);
       if (!s.length) return SKIP("no Session header was sent");
-      const bad = [], none = [], hits = [];
+      const bad = [], none = [], hits = [], loose = new Set();
       for (const { r, jwt } of s) {
         const dlg = decodeJwt(jwt.header.poppy_dlg);
         if (!dlg) { none.push(`${r.method} ${r.path}`); continue; }
-        if (dlg.header.typ !== "poppy-delegation+jwt") note(bad, hits, r, `${r.method} ${r.path}: ${JSON.stringify(dlg.header.typ)}`);
+        const t = typIs(dlg.header.typ, "poppy-delegation+jwt");
+        if (!t.ok) note(bad, hits, r, `${r.method} ${r.path}: ${JSON.stringify(dlg.header.typ)}`);
+        else if (!t.exact) loose.add(JSON.stringify(dlg.header.typ));
       }
       // Absence has its own check, delegation.present. Reporting it here was a
       // misattribution: the defect is that no delegation was sent at all, and 5.2 has its
       // own sentence for that.
       if (none.length && !bad.length) return SKIP("no delegation was sent, which delegation.present reports");
-      return bad.length ? FAIL("a delegation did not declare poppy-delegation+jwt", bad.slice(0, 3), hits)
-                        : PASS("every Session JWT carried a delegation declaring poppy-delegation+jwt");
+      if (bad.length) return FAIL("a delegation did not declare poppy-delegation+jwt", bad.slice(0, 3), hits);
+      return loose.size
+        ? PASS(`every delegation named the media type poppy-delegation+jwt, but not with the exact spelling 5.2 gives: ${[...loose].slice(0, 2).join(", ")}. RFC 7515 makes these the same type; a Company that compares the literal would reject it`)
+        : PASS("every Session JWT carried a delegation declaring poppy-delegation+jwt");
     },
   },
   {
@@ -447,11 +497,12 @@ export const CHECKS = [
     run(log) {
       const s = sessionRequests(log);
       if (!s.length) return SKIP("no Session header was sent");
-      const bad = [], unknown = []; const hits = [];
+      const bad = [], unknown = []; const hits = []; let verified = 0;
       for (const { r, jwt } of s) {
         const dlg = decodeJwt(jwt.header.poppy_dlg);
         const jwk = dlg?.payload?.cnf?.jwk;
-        if (!jwk) continue;                       // delegation.typ reports the absence
+        if (!jwk) continue;                       // delegation.present reports the absence
+        verified++;
         const ok = verifyCompact(jwt.compact, jwk);
         if (ok === null) { unknown.push(`${r.method} ${r.path}: alg ${JSON.stringify(jwt.header.alg)}`); continue; }
         if (!ok) { note(bad, hits, r, `${r.method} ${r.path}: the signature does not verify against the delegation's cnf.jwk`); continue; }
@@ -461,7 +512,13 @@ export const CHECKS = [
       }
       if (bad.length) return FAIL("a Session JWT was not signed by the key its delegation names", bad.slice(0, 3), hits);
       if (unknown.length) return SKIP(`an algorithm this grader cannot verify: ${unknown[0]}`, "grader");
-      return PASS(`every Session JWT verified against its delegation's key on ${s.length} request(s)`);
+      // Count what was actually verified. It used to report "every Session JWT verified
+      // against its delegation's key on 1 request(s)" for a JWT with NO delegation, because
+      // there was no key and the loop skipped it. The verdict was harmless, since
+      // delegation.present fails, but the sentence was false, and a false sentence in a
+      // report is what this project spends most of its effort on.
+      if (!verified) return SKIP("no Session JWT carried a delegation, so there was no key to verify against");
+      return PASS(`every Session JWT verified against its delegation's key on ${verified} request(s)`);
     },
   },
   {
