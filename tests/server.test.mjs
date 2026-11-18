@@ -209,3 +209,60 @@ test("the three documents agree after the origin is known", async () => {
     assert.equal(doc.organization.domain, host, "3.1: domain is the host that serves the document, with its port");
   }, { discovery: undefined });
 });
+
+test("a record carries where the request came from, so foreign traffic can be seen", async () => {
+  // The report renders a salted `source` per request and the one thing it is for is letting a
+  // builder see that a request in their run came from somewhere other than their agent: a
+  // scanner probing a fresh hostname, or a previous builder's agent still polling. Nothing
+  // populated the field, so every request in every production report read `source: null` and
+  // the mechanism was decorative.
+  await withGrader(async (g, port) => {
+    await fetch(`${base(port)}/v1/orders`);
+    const r = g.records.at(-1);
+    assert.equal(typeof r.remoteAddress, "string", "no record of where the request came from");
+    assert.match(r.remoteAddress, /127\.0\.0\.1|::1|::ffff:127/, `got ${r.remoteAddress}`);
+  });
+});
+
+test("behind a proxy the forwarded client address is preferred over the socket", async () => {
+  // Every request behind the tunnel arrives from the tunnel process, so the socket address is
+  // one constant and distinguishes nothing. Cloudflare sets cf-connecting-ip; the standard
+  // Forwarded and X-Forwarded-For are accepted too, leftmost value.
+  await withGrader(async (g, port) => {
+    await fetch(`${base(port)}/v1/orders`, { headers: { "cf-connecting-ip": "203.0.113.7" } });
+    assert.equal(g.records.at(-1).remoteAddress, "203.0.113.7");
+    await fetch(`${base(port)}/v1/orders`, { headers: { "x-forwarded-for": "203.0.113.9, 198.51.100.1" } });
+    assert.equal(g.records.at(-1).remoteAddress, "203.0.113.9", "the leftmost forwarded value is the client");
+    await fetch(`${base(port)}/v1/orders`, { headers: { forwarded: 'for="203.0.113.11";proto=https' } });
+    assert.equal(g.records.at(-1).remoteAddress, "203.0.113.11");
+  }, { trustForwardedFor: true });
+});
+
+test("a forwarded header is ignored unless the deployment says to trust it", async () => {
+  // Otherwise an agent could split its own traffic into any number of apparent sources by
+  // sending a header, which is the one thing this field is used to show.
+  await withGrader(async (g, port) => {
+    await fetch(`${base(port)}/v1/orders`, { headers: { "x-forwarded-for": "203.0.113.9" } });
+    assert.notEqual(g.records.at(-1).remoteAddress, "203.0.113.9",
+      "a client-supplied address was believed with nothing in front to overwrite it");
+  });
+});
+
+test("every endpoint the classifier reads is also checked against the control-plane prefix", async () => {
+  // The first version of this guard walked its own shorter list, so a feedback endpoint, an
+  // OAuth endpoint or a version document under the prefix was swallowed by the control plane
+  // and examined by no rule, which reads as conformance.
+  const cases = {
+    "feedbackEndpoint": { feedbackEndpoint: "http://127.0.0.1:8/grader/feedback" },
+    "authServerEndpoints": { authServerEndpoints: ["http://127.0.0.1:8/grader/token"] },
+    "extensionEndpoints": { extensionEndpoints: ["http://127.0.0.1:8/grader/ops"] },
+    "supported_versions": { discovery: { ...DISCOVERY, supported_versions: { "1.0": "http://127.0.0.1:8/grader/v1" } } },
+  };
+  for (const [what, over] of Object.entries(cases))
+    assert.throws(() => validateConfig({ origin: "http://127.0.0.1:8", discovery: DISCOVERY,
+                                         controlPrefix: "/grader/", ...over }),
+      /control-plane prefix/, `${what} under the control-plane prefix was accepted`);
+  // and the control: the same endpoints elsewhere are fine
+  assert.doesNotThrow(() => validateConfig({ origin: "http://127.0.0.1:8", discovery: DISCOVERY,
+    controlPrefix: "/grader/", feedbackEndpoint: "http://127.0.0.1:8/poppy/feedback" }));
+});

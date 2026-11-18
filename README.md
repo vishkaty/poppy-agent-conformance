@@ -86,6 +86,70 @@ Every failure names the rule, quotes the sentence of 1.0 it enforces, links the 
 names the request that decided it. A test requires that of every check, because a failure a
 builder cannot trace to a request is one they have to ask us about.
 
+## A run
+
+`rig.mjs` is how a builder actually uses this. It stands up two Companies, because several
+sentences of 1.0 can only be judged across two of them: that a User ID differs per Company
+and that a delegated key is not shared between them. Locally they are two loopback ports; in
+production they are two hostnames, one tunnel ingress rule each, so each Company keeps its
+own configured public origin and the public URL is never derived from a Host header.
+
+```
+POST /grader/runs            -> 201 with a token, the two origins, and a report link
+   ... drive your agent at both origins ...
+POST /grader/runs/<token>/end -> freezes the run
+GET  /grader/report/<token>   -> the report, HTML, or .json for the same thing as data
+```
+
+A run is an exclusive lease, and that choice is the whole design. The alternative was to
+attribute each request to a run by the `iss` of its Session JWT, which is tidier and wrong:
+the headline failure this grader exists to catch is a request carrying no Session JWT at
+all, and such a request has no `iss` to attribute by. Charging another builder's bare
+request to your run would produce a wrong FAIL, and a wrong FAIL is the most expensive
+output this instrument can produce. So one agent is graded at a time, a second request gets
+409 without naming the holder, and the lease expires on its own after fifteen minutes so a
+closed laptop does not hold the grader.
+
+Nothing is retained that does not belong to a live run. A request before your lease, or
+after your run is frozen, is examined by no rule, and the report says how many there were
+rather than leaving the absence to read as conformance. The same goes for a run that sends
+more than the per-run limit: counted, and stated.
+
+The report link is the only credential. It is 128 bits, it is not stored (the run is keyed
+by its hash), it is never written to any console stream, and the page does not contain it,
+so a screenshot cannot leak it and `Referrer-Policy: no-referrer` stops a specification
+link on the page from carrying it to someone else's site. A wrong token answers exactly what
+an unknown path answers, byte for byte and header for header, so the existence of a report
+cannot be probed.
+
+## The canary gate, and the mistake it is for
+
+The worst thing this project could do is misconfigure its own deployment so that every
+request fails, and then print a confident red report with a builder's own request
+identifiers beside it. So before any lease is granted, the grader drives itself with
+conforming traffic minted by the protocol authors' own signing code, and refuses to grade
+anybody unless every rule the canary is built to exercise comes back PASS. Not just FAIL:
+the quieter failure in this project's history is a check that stops reaching anything and
+returns INCONCLUSIVE for ever, so an unreached rule fails the gate exactly as loudly.
+
+The first version of that gate was self-confirming, which is worth stating because it is the
+easiest mistake to make here. It built the `htu` claim from the Company's published
+discovery document and compared it against the configured origin, as though those were two
+independent facts. They are one variable: the document is derived from the origin. A
+loopback canary therefore compares a value with itself and passes while the hostname a
+builder is given points at nothing, or at the other listener.
+
+So the gate now sends one leg through the public hostname and requires that it arrive at
+this Company with the Host it was sent to. That is the only part of the control which is not
+a function of the same configuration it is checking, and it is what catches a tunnel whose
+ingress rules are swapped, a hostname that resolves to nothing, and a hostname still
+pointing at an older process. It also counts what its own traffic reached: if the canary
+sends requests to listed destinations and fewer are classified as destinations, the grader
+would examine less of a real agent than it claims to, and it says so instead of passing.
+
+Every rule is either in the canary's expected set or in an exclusion list with a reason, and
+a test enforces that, so the next check added cannot be quietly forgotten by both.
+
 ## Running it
 
 ```sh
@@ -105,6 +169,27 @@ failed traffic built by the people who wrote the specification, our grader would
 and not the traffic. The same tests compare our `ath` and our RFC 7638 thumbprint against
 theirs, value for value, because a grader whose hashing disagrees would fail every
 conforming agent on the key comparison.
+
+And it kill-tests itself. `tools/killtest.mjs` breaks each guard on purpose, one line at a
+time, and requires a named test to die:
+
+```sh
+node tools/killtest.mjs           # every mutation
+node tools/killtest.mjs lease     # only the ones whose id matches
+```
+
+A mutation that survives means no test covers that guard. A mutation caught only by a test
+other than the one named means that test proves something other than what its name says.
+Both are reported and both have happened: the first run of this harness found that the mark
+deciding which run a request belongs to could be deleted with nothing failing, and that a
+test asserting the run token is never logged had cleared its own captured output after
+proving the capture worked, which wiped the very line a logged token would have written. It
+also found a defect by hanging rather than by failing, which is a finding in itself: an
+exception inside the gate left the request with no response at all.
+
+Each mutation writes the original file to a backup before editing and restores any backup
+found at startup, because the first version reverted in a `finally` and a killed process
+left a mutation in the working tree.
 
 That control exists because our own fixture is only our reading of the text. Two
 implementations written from one reading agree with each other and disagree with the

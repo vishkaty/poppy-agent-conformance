@@ -29,7 +29,17 @@ export function validateConfig(cfg) {
   if (d.web?.browser_session_endpoint) listed.push(["web.browser_session_endpoint", d.web.browser_session_endpoint]);
   if (d.tasks?.endpoint) listed.push(["tasks.endpoint", d.tasks.endpoint]);
   for (const e of cfg.extensionEndpoints ?? []) listed.push(["extension endpoint", e]);
+  // The same lists record.mjs reads, so nothing the classifier knows about is unchecked here.
+  // An earlier version walked a shorter list and a feedback endpoint, an OAuth endpoint or a
+  // version document could sit under the control-plane prefix unnoticed.
+  if (cfg.feedbackEndpoint) listed.push(["feedbackEndpoint", cfg.feedbackEndpoint]);
+  for (const e of cfg.authServerEndpoints ?? []) listed.push(["authServerEndpoints[]", e]);
+  for (const [v, url] of Object.entries(d.supported_versions ?? {}))
+    if (url) listed.push([`supported_versions[${v}]`, url]);
 
+  // A destination under the caller's control-plane prefix would be answered by the control
+  // plane and examined by no rule, which reads as conformance. Refused, not shadowed.
+  const prefix = cfg.controlPrefix;
   const warnings = [];
   for (const [where, url] of listed) {
     let x;
@@ -39,6 +49,8 @@ export function validateConfig(cfg) {
     if (x.search || x.hash) throw new Error(`${where} must have no query or fragment: ${url}`);
     if (x.origin !== parsed.origin)
       warnings.push(`${where} is ${url}, on ${x.origin}, which this grader does not serve: requests there are examined by no rule`);
+    if (prefix && x.origin === parsed.origin && x.pathname.startsWith(prefix))
+      throw new Error(`${where} is ${url}, under the control-plane prefix ${prefix}: the control plane would answer it and no rule would examine it`);
   }
   return warnings;
 }
@@ -60,6 +72,21 @@ export function createGrader(cfg) {
   const records = [];
   const maxBody = config.maxBodyBytes ?? DEFAULT_MAX_BODY;
 
+  // Every record gets a sequence number, assigned whether or not it is retained.
+  //
+  // A caller identifies a span of traffic by seq rather than by an array index, so pruning
+  // old records cannot silently shift what a span means. `config.keep` lets the caller
+  // decline to retain one, which is how a bounded run is possible; the count of declined
+  // records is kept HERE as well, because the whole point of this file is that a request
+  // nothing recorded is a request no rule examines, and that must never be silent.
+  let seq = 0, dropped = 0;
+  const push = (record) => {
+    record.seq = ++seq;
+    if (config.keep && !config.keep(record)) { dropped++; return record; }
+    records.push(record);
+    return record;
+  };
+
   const server = createServer((req, res) => {
     // Stamped here, synchronously, before any await and before a byte of body is read. A
     // long poll or a slow upload would otherwise show up as clock skew in the agent's iat.
@@ -73,19 +100,27 @@ export function createGrader(cfg) {
     const rawTarget = String(req.url ?? "/");
     const unsafe = /(^|\/)\.\.?(\/|$)/.test(rawTarget) || rawTarget.includes("\\");
 
+    // The caller's own control plane, if it shares this listener. Checked AFTER the dot
+    // segment refusal above, so a target like /grader/../v1/orders cannot be answered by
+    // one of the two and judged as the other. A handled request is never recorded, which is
+    // deliberate and is the single exception to the guarantee in the header comment: it is
+    // our traffic, not the agent's. A configured destination under the same prefix is
+    // refused by validateConfig rather than shadowed here.
+    if (config.control && config.control(req, res, rawTarget)) return;
+
     const record = recordOf(req, config, { at, body: null, bodyComplete: true });
     record.rawTarget = rawTarget;
     if (unsafe) {
       record.refused = true;
       record.isResource = false; record.isPage = false; record.mustNotCarry = false;
       record.classifiedAs = "refused: the target has dot segments or a backslash, so routing and classification could disagree";
-      records.push(record);
+      push(record);
       res.writeHead(400, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "invalid_request" }));
       return;
     }
     // Push now, so an abort cannot lose it. The body is filled in below, in place.
-    records.push(record);
+    push(record);
 
     const hasBody = req.headers["content-length"] !== undefined || req.headers["transfer-encoding"] !== undefined;
     if (!hasBody) { respond(req, res, record); return; }
@@ -114,7 +149,7 @@ export function createGrader(cfg) {
   // by Node and never seen, so the grader could not honestly say it recorded everything.
   // Attaching it means we own the response.
   server.on("clientError", (err, socket) => {
-    records.push({
+    push({
       rejected: true, code: err.code ?? "UNKNOWN", at: Math.floor(Date.now() / 1000),
       bytes: err.rawPacket?.length ?? null,
       classifiedAs: "rejected before the request could be parsed, so nothing about it is known",
@@ -154,6 +189,8 @@ export function createGrader(cfg) {
 
   return {
     server, records, warnings,
+    get seq() { return seq; },
+    get dropped() { return dropped; },
     // The configured origin must be the one actually served, or every htu comparison is
     // wrong for our deployment and not for the agent. Used by tests on an ephemeral port
     // and by the rig once the public hostname is known.

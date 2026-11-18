@@ -150,6 +150,28 @@ export function classify(url, method, cfg) {
   return { isResource: false, isPage: false, mustNotCarry: false, why: "not a Session destination" };
 }
 
+// Where the request came from.
+//
+// Used only to let a builder SEE that traffic in their run came from somewhere other than
+// their own agent: a scanner probing a freshly published hostname, or a previous builder's
+// agent still long polling. It never decides a verdict, and the report shows a salted prefix
+// rather than the address.
+//
+// A forwarded header is honoured only when the deployment says something in front overwrites
+// it. Trusting one by default would let an agent split its own traffic into three sources by
+// sending a header, and behind no proxy at all the socket address is the truth.
+export function sourceOf(req, cfg) {
+  const h = req.headers ?? {};
+  const first = v => String(v ?? "").split(",")[0].trim() || null;
+  if (cfg?.trustForwardedFor) {
+    // Cloudflare overwrites cf-connecting-ip on every request, which is why it is first.
+    const fwd = first(h["cf-connecting-ip"]) ?? first(h["x-forwarded-for"])
+      ?? (String(h["forwarded"] ?? "").match(/for="?\[?([^\];,"]+)/)?.[1] ?? null);
+    if (fwd) return fwd;
+  }
+  return req.socket?.remoteAddress ?? null;
+}
+
 // One record. `at` is Unix SECONDS and the caller SHOULD pass the time the request headers
 // arrived: stamping it when the response ends would add a long poll's own duration as
 // apparent clock skew and fail a conforming agent on the iat window.
@@ -172,6 +194,7 @@ export function recordOf(req, cfg, { at, body = null, bodyComplete = true } = {}
     method, url, path: originOf(url) ? norm(new URL(url).pathname) : null,
     at: at ?? Math.floor(Date.now() / 1000),
     headers: { ...req.headers }, body, bodyComplete,
+    remoteAddress: sourceOf(req, cfg),
     isResource: c.isResource, isPage: c.isPage, mustNotCarry: c.mustNotCarry,
     classifiedAs: c.why, misdirected,
     sessionHeaderCount: session.count,

@@ -268,23 +268,37 @@ export const CHECKS = [
       //
       // So: FAIL only when one jti signs requests that DIFFER, which is a signature replayed
       // onto another request and cannot be a retry. Identical resends are reported as a note.
+      // A request whose body was never fully received is left OUT of the comparison. The
+      // Company never saw the whole request, so it cannot claim the signature was reused on
+      // a DIFFERENT one: an upload reset at `{"mes` and retried in full is one request, and
+      // comparing the partial body with the complete one made a conforming agent on a flaky
+      // network look like it had replayed a signature. The exclusion is narrow on purpose:
+      // a jti that signs two different COMPLETE requests still fails, which the control test
+      // beside this one asserts.
       const byJti = new Map();
+      let incomplete = 0;
       for (const { r, jwt } of s) {
         const j = jwt.payload.jti;
         if (j === undefined || j === "") continue;    // claims-present reports those
+        if (r.bodyComplete === false) { incomplete++; continue; }
         const shape = `${r.method} ${htuOf(r) ?? r.path} ${r.body ?? ""}`;
         (byJti.get(j) ?? byJti.set(j, new Set()).get(j)).add(shape);
       }
-      if (!byJti.size) return SKIP("no jti was sent");
+      if (!byJti.size)
+        return SKIP(incomplete
+          ? `${incomplete} request(s) carried a jti but their bodies were never fully received, so none could be compared`
+          : "no jti was sent");
       const replayed = [...byJti].filter(([, shapes]) => shapes.size > 1);
-      const resent = [...byJti].filter(([, shapes]) => shapes.size === 1).length;
-      const total = s.length;
+      const complete = s.length - incomplete;
+      const note = incomplete
+        ? `; ${incomplete} request(s) were left out because the body was never fully received, which a reset upload and its retry look like`
+        : "";
       if (replayed.length) return FAIL(
         "one jti signed requests that differ, so a signature was replayed onto another request",
         replayed.map(([j, sh]) => `${String(j).slice(0, 16)} signed ${sh.size} different requests`).slice(0, 3), s.map(x => x.r));
-      return byJti.size < total
-        ? PASS(`no jti signed two different requests; ${total - byJti.size} identical resend(s) seen, which 5.3 leaves to the Company to reject`)
-        : PASS(`all ${byJti.size} jti values were distinct`);
+      return byJti.size < complete
+        ? PASS(`no jti signed two different requests; ${complete - byJti.size} identical resend(s) seen, which 5.3 leaves to the Company to reject${note}`)
+        : PASS(`all ${byJti.size} jti values were distinct${note}`);
     },
   },
   {

@@ -97,3 +97,33 @@ test("an identical resend is not reported as a replay", async () => {
   const v = only([a, b], "session.jti-unique");
   assert.notEqual(v.verdict, "FAIL", `an identical resend was called a replay: ${v.why}`);
 });
+
+test("an upload that was reset and then retried identically is not a replay", async () => {
+  // 8.3 makes retrying the identical request a safe, intended operation, and server.mjs
+  // records a request whose socket was reset with the bytes it managed to read and
+  // `bodyComplete: false`. Comparing that partial body against the complete one made the
+  // two look like different requests signed by one jti, which is exactly the definition
+  // this check uses for a replay. A conforming agent on a flaky network got a FAIL.
+  const jti = randomUUID();
+  const aborted = await f.request(keys, { method: "POST", path: "/poppy/conversations", jti, body: '{"mes' });
+  aborted.bodyComplete = false;
+  const retried = await f.request(keys, { method: "POST", path: "/poppy/conversations", jti,
+                                          body: '{"message":{"content":[]}}' });
+  const v = only([aborted, retried], "session.jti-unique");
+  assert.equal(v.verdict, "PASS", `${v.verdict}: ${v.why}`);
+  assert.match(v.why, /incomplete|never fully received|resend/i,
+    "the pass must say why the two bodies differ, or it hides a real replay");
+});
+
+test("a replay onto a genuinely different request is still a FAIL when one body is incomplete", async () => {
+  // The control for the test above. Excusing every incomplete record would turn a real
+  // replay into a pass, which is the trade this project refuses: an exclusion must be
+  // narrow enough that the breach it was built for still fails.
+  const jti = randomUUID();
+  const aborted = await f.request(keys, { method: "POST", path: "/poppy/conversations", jti, body: '{"a' });
+  aborted.bodyComplete = false;
+  const other = await f.request(keys, { method: "GET", path: "/poppy/orders", jti });
+  const elsewhere = await f.request(keys, { method: "GET", path: "/poppy/invoices", jti });
+  const v = only([aborted, other, elsewhere], "session.jti-unique");
+  assert.equal(v.verdict, "FAIL", `${v.verdict}: ${v.why}`);
+});

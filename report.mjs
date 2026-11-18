@@ -219,6 +219,9 @@ export function buildReport(run) {
         "Whether a User ID or Agent ID was derived from personal information. 5.1 forbids it even with a keyed hash, and the guides allow an HMAC of an internal id, which a Company cannot tell apart on the wire.",
       ],
       recordedNotJudged: {
+        // Requests that arrived after this run's per-Company limit. Counted and reported,
+        // never silently dropped: absence that does not announce itself reads as conformance.
+        beyondLimit: run.beyondLimit ?? 0,
         misdirected: all.filter(({ r }) => r.misdirected).length,
         rejected: all.filter(({ r }) => r.rejected).length,
         refused: all.filter(({ r }) => r.refused).length,
