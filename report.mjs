@@ -270,7 +270,12 @@ export function buildReport(run) {
       scope: `This grader judges ${summary.rules} rules of ${PROV.version}: ${CHECKS.length} that one Company can see and ${PAIRWISE.length} that need two. ${PROV.version} contains many more requirements. A PASS on a rule means the recorded requests satisfied that sentence. It is not a statement that your agent conforms to ${PROV.version}.`,
       destinations: `The grader saw only what reached ${A.ctx.domain} and ${B.ctx.domain}. A request to any other origin was examined by no rule.`,
       notJudged: [
-        "A delegation's signature against the key published at the agent's jwks_uri. Not implemented; the delegation is shown as not verified.",
+        // Conditional, because it stopped being true. A report whose own delegation.signature
+        // verdict was decided from a fetched key set must not also list that rule as
+        // unimplemented, and a deployment that fetches nothing must still say that it does not.
+        ...(all.some(({ r }) => r.issuerKeys?.outcome === "ok")
+          ? []
+          : ["A delegation's signature against the key published at the agent's jwks_uri. This deployment did not fetch the agent's documents, so the delegation is shown as not verified."]),
         "Whether a User ID or Agent ID was derived from personal information. 5.1 forbids it even with a keyed hash, and the guides allow an HMAC of an internal id, which a Company cannot tell apart on the wire.",
       ],
       recordedNotJudged: {

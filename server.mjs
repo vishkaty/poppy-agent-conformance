@@ -132,7 +132,7 @@ export function createGrader(cfg) {
   // without a network.
   const issuerKeys = cfg.verifyDelegations
     ? (cfg.issuerKeys ?? createIssuerKeys({ lookup: defaultLookup }))
-    : null;
+    : null;   // its default transport pins the connection to the address it checked
 
   // Set by the rig before it drives the canary, cleared after. Not configuration: it exists
   // only for the seconds the gate is running.
@@ -361,11 +361,18 @@ export function createGrader(cfg) {
       // The key set is attached to the record first, because the checks are pure and
       // synchronous: every verdict has to be reproducible from a recorded log with no network,
       // and enforcement calls grade() on one request.
-      if (issuerKeys) {
+      //
+      // Only while a run is open, or while the caller's own control is driving. Attached to
+      // every request that carried a decodable header, this made the fetch reachable by anyone
+      // who could reach the hostname: the egress exposure was accepted on the premise that it
+      // was the lease holder's doing, and without this it was not. It also made one bare
+      // request enough to poison the resolver for the next gate, which was measured.
+      if (issuerKeys && (config.verifyWhen?.() ?? true)) {
         const jwt = decodeJwt(record.headers?.["poppy-session"]);
         const iss = jwt?.payload?.iss;
         if (typeof iss === "string" && iss) {
-          try { record.issuerKeys = await issuerKeys.forIssuer(iss); }
+          const dlg = decodeJwt(jwt.header?.poppy_dlg);
+          try { record.issuerKeys = await issuerKeys.forIssuer(iss, { wantKid: dlg?.header?.kid }); }
           catch (err) { record.issuerKeys = { outcome: "grader", detail: String(err?.message ?? err), keys: [], kids: [] }; }
         }
       }

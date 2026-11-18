@@ -736,3 +736,123 @@ test("with verification on, a canary whose published key is wrong grades nobody"
     assert.equal(body.rule, "delegation.signature", `fired on ${body.rule}: ${body.why}`);
   } finally { await r.close(); }
 });
+
+test("nothing is fetched while no run is open, so the egress is not an open primitive", async () => {
+  // The fetch was attached to every request carrying a decodable Session header, before any
+  // check that a run was open. So anyone who could reach the hostname could make this process
+  // connect to a host they named, and the per-lease budget was really per process. The egress
+  // exposure was accepted on the premise "whoever holds the lease"; this restores it.
+  const { createIssuerKeys } = await import("../issuer-keys.mjs");
+  const map = {};
+  let fetches = 0;
+  const send = (url, init) => { fetches++; return viaHost(url, init, map); };
+  const keys = createIssuerKeys({ fetch: send, lookup: async () => ["93.184.216.34"] });
+  const r = createRig({ canaryFetch: (url, init) => viaHost(url, init, map),
+    companies: COMPANIES().map(c => ({ ...c, verifyDelegations: true, issuerKeys: keys })) });
+  try {
+    const bound = await r.listen();
+    const origins = bound.map(p => `https://company-${p}.example`);
+    origins.forEach((o, i) => { map[o] = bound[i]; });
+    bound.forEach((port) => { map[`http://127.0.0.1:${port}`] = port; });
+    r.setOrigins(origins);
+    r.setCanaryPublicBase(origins);
+    const control = `http://127.0.0.1:${bound[0]}`;
+
+    // a stranger's iss, named by a request that holds no lease
+    const ref = await import("../reference/jose.ts");
+    const strangerIss = "https://stranger.example/a.json";
+    const op = await ref.generateKey(), key = await ref.generateKey();
+    const dlg = await ref.signDelegation({ root: op, delegated: key.publicJwk, iss: strangerIss });
+    const jwt = await ref.signSessionJwt({ key, delegation: dlg, iss: strangerIss,
+      aud: `${origins[0]}/poppy`, sid: "s", sub: "u", method: "GET", url: `${origins[0]}/v1/orders` });
+    const drive = () => viaHost(`${origins[0]}/v1/orders`,
+      { headers: { "poppy-session": jwt, "poppy-version": "1.0" } }, map);
+
+    const before = fetches;
+    await drive();
+    assert.equal(fetches, before, "a request with no run open made this process fetch a stranger's URL");
+
+    const made = await fetch(`${control}/grader/runs`, { method: "POST" });
+    const text = await made.text();
+    assert.equal(made.status, 201, text);
+    const token = JSON.parse(text).token;
+    const during = fetches;
+    await drive();
+    assert.ok(fetches > during, "a request inside a run did not fetch, so verification is off when it matters");
+
+    await fetch(`${control}/grader/runs/${token}/end`, { method: "POST" });
+    const after = fetches;
+    await drive();
+    assert.equal(fetches, after, "a request after the run ended still fetched");
+  } finally { await r.close(); }
+});
+
+test("one request cannot deny every later lease", async () => {
+  // Reproduced before this test existed: the canary's iss is a stable string, so a bare
+  // request naming it made the resolver fetch an identity that is only mounted while a gate
+  // runs, get a 404, and memoise it as the agent's fault for 30 seconds. The next gate read
+  // that memo and answered 503 "this deployment is misconfigured". No lease, no log, and
+  // health stayed 200, so nothing noticed.
+  const { createIssuerKeys } = await import("../issuer-keys.mjs");
+  const map = {};
+  const send = (url, init) => viaHost(url, init, map);
+  const keys = createIssuerKeys({ fetch: send, lookup: async () => ["93.184.216.34"] });
+  const r = createRig({ canaryFetch: send,
+    companies: COMPANIES().map(c => ({ ...c, verifyDelegations: true, issuerKeys: keys })) });
+  try {
+    const bound = await r.listen();
+    const origins = bound.map(p => `https://company-${p}.example`);
+    origins.forEach((o, i) => { map[o] = bound[i]; });
+    bound.forEach((port) => { map[`http://127.0.0.1:${port}`] = port; });
+    r.setOrigins(origins);
+    r.setCanaryPublicBase(origins);
+    const control = `http://127.0.0.1:${bound[0]}`;
+
+    const first = await fetch(`${control}/grader/runs`, { method: "POST" });
+    const firstText = await first.text();
+    assert.equal(first.status, 201, firstText);
+    const token = JSON.parse(firstText).token;
+    await fetch(`${control}/grader/runs/${token}/end`, { method: "POST" });
+
+    // a bare request naming the canary's own iss, which is a stable, guessable string
+    const ref = await import("../reference/jose.ts");
+    const canaryIss = `${origins[0]}/canary/agent.json`;
+    const op = await ref.generateKey(), key = await ref.generateKey();
+    const dlg = await ref.signDelegation({ root: op, delegated: key.publicJwk, iss: canaryIss });
+    const jwt = await ref.signSessionJwt({ key, delegation: dlg, iss: canaryIss,
+      aud: `${origins[0]}/poppy`, sid: "s", sub: "u", method: "GET", url: `${origins[0]}/v1/orders` });
+    await viaHost(`${origins[0]}/v1/orders`, { headers: { "poppy-session": jwt, "poppy-version": "1.0" }, method: "GET" }, map);
+
+    const after = await fetch(`${control}/grader/runs`, { method: "POST" });
+    assert.equal(after.status, 201, `one request denied the next lease: ${await after.text()}`);
+  } finally { await r.close(); }
+});
+
+test("two leases in the same second both succeed, with a key the gate generated afresh", async () => {
+  // The canary generates a new operator key per gate and publishes it with no-store, but the
+  // key set was cached under the unchanging canary iss with a sixty second floor, so a second
+  // lease within a minute verified the NEW delegation against the OLD key and answered 503.
+  // Leasing, ending and leasing again is the commonest sequence a builder performs.
+  const { createIssuerKeys } = await import("../issuer-keys.mjs");
+  const map = {};
+  const send = (url, init) => viaHost(url, init, map);
+  const keys = createIssuerKeys({ fetch: send, lookup: async () => ["93.184.216.34"] });
+  const r = createRig({ canaryFetch: send,
+    companies: COMPANIES().map(c => ({ ...c, verifyDelegations: true, issuerKeys: keys })) });
+  try {
+    const bound = await r.listen();
+    const origins = bound.map(p => `https://company-${p}.example`);
+    origins.forEach((o, i) => { map[o] = bound[i]; });
+    bound.forEach((port) => { map[`http://127.0.0.1:${port}`] = port; });
+    r.setOrigins(origins);
+    r.setCanaryPublicBase(origins);
+    const control = `http://127.0.0.1:${bound[0]}`;
+
+    for (const attempt of [1, 2, 3]) {
+      const res = await fetch(`${control}/grader/runs`, { method: "POST" });
+      const text = await res.text();
+      assert.equal(res.status, 201, `lease ${attempt} of 3 in the same second: ${text}`);
+      await fetch(`${control}/grader/runs/${JSON.parse(text).token}/end`, { method: "POST" });
+    }
+  } finally { await r.close(); }
+});

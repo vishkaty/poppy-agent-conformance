@@ -20,8 +20,10 @@
 //     hostname lets DNS answer differently the second time, so the checked address is pinned
 //     and the hostname is kept only for TLS and Host.
 import { classifyAddress, checkTargetUrl } from "./addresses.mjs";
+import { pinnedGet } from "./fetch-pinned.mjs";
 
 const MAX_BYTES = 100_000;        // the size the guides suggest
+const TIMEOUT_MS = 5_000;        // "a timeout of a few seconds", likewise
 const REFETCH_SECONDS = 30;       // the interval the guides suggest
 const CACHE_MIN = 60, CACHE_MAX = 24 * 3600;   // the bounds the guides give
 const BUDGET = 32;                // distinct issuers one lease may make us fetch
@@ -29,9 +31,15 @@ const MAX_KEYS = 50;
 
 const result = (outcome, detail, extra = {}) => ({ outcome, detail, keys: [], kids: [], ...extra });
 
-export function createIssuerKeys({ fetch: doFetch = globalThis.fetch, lookup, now = () => Math.floor(Date.now() / 1000),
+// The default transport is the PINNED one, not global fetch.
+//
+// It used to be global fetch with a `connectTo` option, which Node does not have and ignores
+// in silence, so the address this file had just checked was not the address it connected to.
+// The only test asserted that a fake fetch had recorded the option, so the suite was green
+// over a defence that did not exist. A test injects a transport; nothing else should.
+export function createIssuerKeys({ fetch: doFetch = pinnedGet, lookup, now = () => Math.floor(Date.now() / 1000),
                                    maxBytes = MAX_BYTES, refetchSeconds = REFETCH_SECONDS,
-                                   budget = BUDGET } = {}) {
+                                   budget = BUDGET, timeoutMs = TIMEOUT_MS } = {}) {
   const cache = new Map();        // iss -> { at, expiresAt, outcome, detail, keys, kids, jwksUri }
   const attempts = new Map();     // iss -> { at, outcome, detail }
   const spent = new Set();        // distinct issuers fetched under the current budget
@@ -52,17 +60,32 @@ export function createIssuerKeys({ fetch: doFetch = globalThis.fetch, lookup, no
       // Not the builder's fault: we cannot tell our own resolver from their missing zone, and
       // the sentence names the host so a builder with no such zone recognises it.
       return { whose: "grader", detail: `could not resolve ${target.host}` };
-    for (const a of addresses) {
-      const c = classifyAddress(a);
-      if (!c.allowed)
-        return { whose: "agent", detail: `${target.host} resolves to ${a}, a ${c.kind} address, and section 3 forbids connecting to one for a URL the other party gave us` };
+    // Section 3 forbids CONNECTING to a loopback, private or link-local address for a URL the
+    // other party gave us. It does not say the other party is at fault, and this rule is
+    // enforced, so blaming them means refusing a conforming agent with 400. A host that
+    // answers with a public address AND a blocked one is split-horizon DNS, a VPN or a mesh
+    // network, which is not the builder's doing: that abstains as our limit. A host where
+    // EVERY address is blocked is one no conforming Company could use either, so that stays
+    // the agent's defect.
+    const blocked = addresses.map(a => ({ a, c: classifyAddress(a) })).filter(x => !x.c.allowed);
+    if (blocked.length) {
+      const { a, c } = blocked[0];
+      const detail = `${target.host} resolves to ${a}, a ${c.kind} address, and section 3 forbids connecting to one for a URL the other party gave us`;
+      return blocked.length === addresses.length
+        ? { whose: "agent", detail }
+        : { whose: "grader", detail: `${detail}; it also answers with a public address, so this grader will not choose between them` };
     }
 
     let res;
     try {
-      res = await doFetch(target.url, { redirect: "manual", connectTo: addresses[0],
+      // `address` is the one the loop above approved, and the transport connects to THAT,
+      // keeping the hostname for the Host header and for the certificate check.
+      res = await doFetch(target.url, { address: addresses[0], timeoutMs, maxBytes,
+                                        redirect: "manual", connectTo: addresses[0],
                                         headers: { accept: "application/json" } });
     } catch (err) {
+      if (err?.overCap)
+        return { whose: "grader", detail: `${target.url} returned more than ${maxBytes} bytes, larger than this grader reads` };
       return { whose: "grader", detail: `${target.url}: ${err?.cause?.code ?? err?.message ?? err}` };
     }
     if (res.redirected || (res.status >= 300 && res.status < 400))
@@ -73,6 +96,8 @@ export function createIssuerKeys({ fetch: doFetch = globalThis.fetch, lookup, no
       return { whose: "server", detail: `${target.url} answered ${res.status}, which this grader cannot interpret as a verdict about your agent` };
 
     const text = await res.text();
+    // The transport aborts an oversize body as it arrives; this still catches an injected
+    // transport that does not, so neither place is the only one that counts.
     if (text.length > maxBytes)
       return { whose: "grader", detail: `${target.url} returned ${text.length} bytes, larger than the ${maxBytes} this grader reads` };
     let body;
@@ -106,10 +131,18 @@ export function createIssuerKeys({ fetch: doFetch = globalThis.fetch, lookup, no
 
   return {
     // Everything a check needs to decide, attached to the record by the caller.
-    async forIssuer(iss) {
+    // `wantKid` is the kid the delegation in front of us names. A cached key set that does not
+    // contain it is refetched once, within the interval, which is what every ordinary JWKS
+    // consumer does and what the guides ask for: "Publish a new key in `jwks_uri` before
+    // signing with it." Without this, a builder who rotated a key was refused 400 against a
+    // cache that could be up to a day old, and ending the run did not clear it.
+    async forIssuer(iss, { wantKid } = {}) {
       const at = now();
       const hit = cache.get(iss);
-      if (hit && at < hit.expiresAt)
+      const stale = hit && wantKid && !(hit.value.kids ?? []).includes(wantKid)
+        && !(hit.value.keys ?? []).some(k => !k?.kid)      // a set with an unlabelled key may still hold it
+        && at - hit.at >= refetchSeconds;
+      if (hit && at < hit.expiresAt && !stale)
         return { ...hit.value, source: "cache", fetchedAt: hit.at, ageSeconds: at - hit.at };
 
       const failed = attempts.get(iss);
@@ -132,6 +165,9 @@ export function createIssuerKeys({ fetch: doFetch = globalThis.fetch, lookup, no
     },
     // A new lease starts with a fresh budget, and forgets nothing it verified.
     newRun() { spent.clear(); },
+    // Everything remembered about one issuer, dropped. The gate uses it on its own issuer,
+    // whose key changes every run and whose identity is only mounted while it drives.
+    forget(iss) { cache.delete(iss); attempts.delete(iss); spent.delete(iss); },
     get cached() { return cache.size; },
   };
 }

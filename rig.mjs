@@ -263,6 +263,9 @@ export function createRig(cfg = {}) {
 
   const graders = companies.map((c, i) => createGrader({
     ...c, controlPrefix: CONTROL_PREFIX, keep: keepFor(i),
+    // A fetch of a stranger's URL happens only for traffic that belongs to a run, or for the
+    // gate's own control. Outside that, nothing this process does reaches outward.
+    verifyWhen: () => !!collector || !!liveRun(),
     ...(i === 0 ? { control: (req, res, target) => control(req, res, target) } : {}),
   }));
 
@@ -393,6 +396,9 @@ export function createRig(cfg = {}) {
                     beforeLease: arrivals.reduce((n, a) => n + a.filter(t => t >= since).length, 0) };
       runs.set(run.id, run);
       active = run;
+      // The budget is per run, which is what its own message claims. Nothing called this, so
+      // it was a per-process budget that outsiders could spend and that never reset.
+      for (const g of graders) g.config.issuerKeys?.newRun?.();
       sweep();
       const origins = graders.map(g => g.config.origin);
       return json(res, 201, {
@@ -405,6 +411,13 @@ export function createRig(cfg = {}) {
 
   // Returns null when the control passed, or the first rule that did not.
   async function runCanary() {
+    // The canary's identity lives at a STABLE url and is republished with a new key on every
+    // gate run, so anything remembered about it from a previous run is wrong by construction:
+    // a cached key set verifies this run's delegation against last run's key, and a remembered
+    // failure (from a 404 when the identity was not mounted) denies every later lease. Both
+    // were measured. So the gate forgets its own issuer before it drives.
+    for (const g of graders) g.config.issuerKeys?.forget?.(g.canaryClientId);
+
     const c = collector = { minted: new Set(), logs: [[], []], intended: [0, 0],
                             publicLeg: [], sendError: [], shortfall: [], legs: [] };
     try {

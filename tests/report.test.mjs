@@ -148,7 +148,10 @@ test("every recorded request appears once in the index, and unexamined ones say 
 test("the report says what it judged against and what it cannot judge", async () => {
   const report = buildReport(await runWithSecrets());
   const about = JSON.stringify(report.about);
-  for (const needed of ["1.0", "2026-11-14", "jwks_uri", "keyed hash", "examined by no rule"])
+  // `jwks_uri` is deliberately NOT in this list any more: whether that rule is a limit depends
+  // on whether this deployment fetched, and the test below owns both directions. These are the
+  // things a report must always say.
+  for (const needed of ["1.0", "2026-11-14", "keyed hash", "examined by no rule"])
     assert.ok(about.includes(needed), `the About section does not mention ${needed}`);
   assert.ok(/not a statement that your agent conforms/i.test(about),
     "the report must say a PASS is not conformance of the whole agent");
@@ -387,4 +390,27 @@ test("a run that was not stopped by a rejection keeps the ordinary advice", asyn
   assert.ok(unreached.length > 0);
   assert.ok(unreached.every(r => !/refused|rejected|stopped/i.test(r.reach.how)),
     "a run nobody refused was told it had been stopped");
+});
+
+test("the report does not tell a builder a rule is unimplemented when it just refused them by it", async () => {
+  // Measured: every report said "A delegation's signature against the key published at the
+  // agent's jwks_uri. Not implemented; the delegation is shown as not verified." That line was
+  // unconditional, so a builder refused 400 under delegation.signature read, in the same
+  // report, that the rule is not implemented.
+  const keys = await f.agentKeys();
+  const verified = await f.request(keys, {});          // the fixture attaches a fetched key set
+  const repVerified = buildReport({ token: "t", started: 1, ended: 2, frozen: true, warnings: [],
+    graderCommit: "x", companies: [{ ctx: CTX_A, log: [verified] }, { ctx: CTX_B, log: [] }] });
+  // Listed as something this grader does not judge at all. The wording may change; what
+  // matters is whether the rule appears in that list while its verdict says otherwise.
+  const saysUnimplemented = (r) => JSON.stringify(r.about.notJudged).includes("jwks_uri");
+  assert.equal(saysUnimplemented(repVerified), false,
+    `the report claims the rule is unimplemented: ${JSON.stringify(repVerified.about.notJudged)}`);
+
+  // and when this deployment really does not verify, it must still say so
+  const unverified = await f.request(keys, { noIssuerKeys: true });
+  const repOff = buildReport({ token: "t", started: 1, ended: 2, frozen: true, warnings: [],
+    graderCommit: "x", companies: [{ ctx: CTX_A, log: [unverified] }, { ctx: CTX_B, log: [] }] });
+  assert.equal(saysUnimplemented(repOff), true,
+    "a deployment that fetched nothing hid that fact instead of listing it");
 });

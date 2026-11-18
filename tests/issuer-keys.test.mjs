@@ -97,14 +97,16 @@ test("an address a stranger could aim us at is refused, and nothing is fetched",
 
 test("one bad address among several refuses the whole fetch", async () => {
   // A host that resolves to a public address AND an internal one is the rebinding shape. Every
-  // address is checked, not the first.
+  // address is checked, not the first, and the fetch is refused whichever way the blame falls.
+  // Whose fault it is is the test further down: a mixed answer is ours, every address blocked
+  // is the agent's.
   const id = await identity();
   const n = net({ routes: good(id), addresses: { "agent.example": ["93.184.216.34", "10.0.0.5"] } });
   const keys = createIssuerKeys({ fetch: n.fetch, lookup: n.lookup, now: () => 1000 });
   const got = await keys.forIssuer(ISS);
-  assert.equal(got.outcome, "agent");
+  assert.notEqual(got.outcome, "ok", "a host answering with an internal address was fetched");
   assert.match(got.detail, /private/, got.detail);
-  assert.deepEqual(n.asked, []);
+  assert.deepEqual(n.asked, [], "it connected anyway");
 });
 
 test("a redirect at the client metadata is the agent's defect, and is not followed", async () => {
@@ -233,4 +235,63 @@ test("a url this grader will not connect to is decided without any lookup", asyn
   }
   assert.deepEqual(n.looked, [], "it resolved a URL it was never going to connect to");
   assert.deepEqual(n.asked, []);
+});
+
+test("a host that resolves to a public address AND a blocked one is not blamed on the builder", async () => {
+  // Split-horizon DNS, a VPN, or a mesh network answering beside the public record. Section 3
+  // forbids us CONNECTING to such an address; it does not say the client is at fault, and this
+  // rule is enforced, so blaming the agent means refusing a conforming one with 400. When
+  // every address is blocked there is nothing a conforming Company could do with it either,
+  // and that stays the agent's defect.
+  const id = await identity();
+  const mixed = net({ routes: good(id), addresses: { "agent.example": ["93.184.216.34", "10.0.0.5"] } });
+  let keys = createIssuerKeys({ fetch: mixed.fetch, lookup: mixed.lookup, now: () => 1000 });
+  let got = await keys.forIssuer(ISS);
+  assert.equal(got.outcome, "grader", `a mixed answer was blamed on the agent: ${got.detail}`);
+  assert.match(got.detail, /private/, got.detail);
+  assert.deepEqual(mixed.asked, [], "it connected anyway");
+
+  const allBad = net({ routes: good(id), addresses: { "agent.example": ["10.0.0.5", "127.0.0.1"] } });
+  keys = createIssuerKeys({ fetch: allBad.fetch, lookup: allBad.lookup, now: () => 1000 });
+  got = await keys.forIssuer(ISS);
+  assert.equal(got.outcome, "agent", `every address blocked should be the agent's: ${got.detail}`);
+});
+
+test("a cached key set is refetched once when the kid in front of us is not in it", async () => {
+  // The most likely wrong refusal against a real builder: they publish a new key, sign with
+  // it, and the cached set from minutes ago does not hold it. 5.2 is enforced, so the request
+  // was refused 400 and section 7 then told the agent to stop until it fixed a cause that was
+  // on our side. The guides say an agent should "Publish a new key in `jwks_uri` before
+  // signing with it", which is exactly what makes a refetch find it.
+  const id = await identity();
+  const second = await identity();
+  let serveBoth = false;
+  const routes = {
+    [ISS]: { body: JSON.stringify({ client_id: ISS, jwks_uri: JWKS }) },
+    [JWKS]: () => ({ status: 200, headers: new Map([["cache-control", "max-age=3600"]]),
+      redirected: false, text: async () => JSON.stringify({ keys: serveBoth
+        ? [{ ...id.operator.publicJwk, kid: "old" }, { ...second.operator.publicJwk, kid: "new" }]
+        : [{ ...id.operator.publicJwk, kid: "old" }] }) }),
+  };
+  const n = net({ routes });
+  let clock = 1000;
+  const keys = createIssuerKeys({ fetch: n.fetch, lookup: n.lookup, now: () => clock, refetchSeconds: 30 });
+
+  const first = await keys.forIssuer(ISS, { wantKid: "old" });
+  assert.equal(first.outcome, "ok");
+  assert.deepEqual(first.kids, ["old"]);
+
+  // the builder rotates, and asks for a kid the cache does not hold, after the interval
+  serveBoth = true;
+  clock = 1040;
+  const after = await keys.forIssuer(ISS, { wantKid: "new" });
+  assert.equal(after.outcome, "ok", after.detail);
+  assert.ok(after.kids.includes("new"), `it served the stale set: ${after.kids.join(", ")}`);
+  assert.equal(after.source, "fetch", "it did not refetch for an unknown kid");
+
+  // and it does NOT refetch on every unknown kid, which would make this a flood
+  const asked = n.asked.length;
+  clock = 1045;
+  await keys.forIssuer(ISS, { wantKid: "nonexistent" });
+  assert.equal(n.asked.length, asked, "an unknown kid inside the interval caused another fetch");
 });
