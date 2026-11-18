@@ -289,3 +289,37 @@ test("sign-in is declared off the way 3.2 says, and the token endpoint behaves a
     }
   } finally { await g.close(); }
 });
+
+test("the token endpoint answers each kind of bad request the way RFC 6749 does", async () => {
+  // 3.2 says a Company in this state "answers every refresh with `invalid_grant`". A REFRESH.
+  // This endpoint answered invalid_grant to everything, including a grant type it does not
+  // list and a request with no grant_type at all, where RFC 6749 §5.2 names different errors:
+  // `unsupported_grant_type` for "The authorization grant type is not supported by the
+  // authorization server" and `invalid_request` for a missing required parameter. The issuer
+  // lists only refresh_token, so any other grant is unsupported here by its own metadata.
+  const g = createGrader({ origin: "http://127.0.0.1", operations: OPERATIONS });
+  const port = await g.listen(0);
+  g.setOrigin(`http://127.0.0.1:${port}`);
+  try {
+    const meta = await (await fetch(`${g.config.origin}/.well-known/oauth-authorization-server/poppy`)).json();
+    const send = (body) => post(meta.token_endpoint,
+      { headers: { "content-type": "application/x-www-form-urlencoded" }, body });
+
+    const cases = [
+      ["a refresh token it never issued", "grant_type=refresh_token&refresh_token=nope", "invalid_grant"],
+      ["a refresh with no token", "grant_type=refresh_token", "invalid_request"],
+      ["a grant type it does not list", "grant_type=authorization_code&code=x", "unsupported_grant_type"],
+      ["a grant type nobody has", "grant_type=magic", "unsupported_grant_type"],
+      ["no grant type at all", "foo=bar", "invalid_request"],
+      ["an empty body", "", "invalid_request"],
+    ];
+    for (const [what, body, error] of cases) {
+      const res = await send(body);
+      assert.equal(res.status, 400, `${what}: ${res.status} ${res.text}`);
+      assert.equal(res.body?.error, error, `${what}: answered ${res.body?.error}`);
+    }
+    // grant_types_supported must agree with what the endpoint actually accepts, or the metadata
+    // and the endpoint are two facts that can disagree.
+    assert.deepEqual(meta.grant_types_supported, ["refresh_token"]);
+  } finally { await g.close(); }
+});

@@ -114,6 +114,21 @@ export const MUTATIONS = [
     kills: "refuses to grade when its own conforming traffic is answered with an error",
     find: "  for (const leg of legs ?? []) if (!(leg.status >= 200 && leg.status < 300)) return leg;", to: "" },
 
+  // the two disclosures that cannot be gated: our own clock, and our own refusal
+  { id: "report/hides-stop", file: "report.mjs", tests: "tests/report.test.mjs",
+    kills: "the report says so instead of blaming the agent",
+    find: "  const stopped = stoppedBy", to: "  const stopped = false && stoppedBy" },
+  { id: "report/blames-our-limit", file: "report.mjs", tests: "tests/report.test.mjs",
+    kills: "the report says so instead of blaming the agent",
+    find: "    if (base?.reachable === false) return base;", to: "" },
+  { id: "checks/hides-our-clock", file: "checks.mjs", tests: "tests/checks.test.mjs",
+    kills: "an iat failure shows both clocks",
+    find: "(your iat ${iat}, our clock ${r.at})", to: "" },
+  { id: "checks/claims-constant-offset", file: "checks.mjs", tests: "tests/checks.test.mjs",
+    kills: "an iat failure shows both clocks",
+    find: "      const constant = offsets.length > 1 && spread <= SKEW_SECONDS;",
+    to: "      const constant = offsets.length > 1;" },
+
   // section 8: the conversation state machine
   { id: "conv/ignores-ownership", file: "conversations.mjs", tests: "tests/conversations.test.mjs",
     kills: "belonging to someone else, get the same 404",

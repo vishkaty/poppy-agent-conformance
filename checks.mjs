@@ -256,16 +256,30 @@ export const CHECKS = [
     run(log) {
       const s = sessionRequests(log);
       if (!s.length) return SKIP("no Session header was sent");
-      const bad = []; const hits = [];
+      const bad = []; const hits = []; const offsets = [];
       for (const { r, jwt } of s) {
         const iat = jwt.payload.iat;
         if (typeof iat !== "number") { note(bad, hits, r, `${r.method} ${r.path}: iat was ${JSON.stringify(iat)}, not a number`); continue; }
         const skew = Math.abs(r.at - iat);
-        if (skew > WINDOW_SECONDS + SKEW_SECONDS) note(bad, hits, r, `${r.method} ${r.path}: iat was ${skew}s from when we saw it`);
+        if (skew > WINDOW_SECONDS + SKEW_SECONDS) {
+          // BOTH clocks, by number. This rule compares the agent's iat with our own
+          // Date.now(), and the canary that gates every run signs with that same clock, so a
+          // deployment whose clock has drifted fails every conforming agent while its own
+          // control passes. Nothing inside this process can detect that, so it is disclosed
+          // instead: a builder who sees our clock beside theirs can tell in one glance.
+          note(bad, hits, r, `${r.method} ${r.path}: iat was ${skew}s from when we saw it (your iat ${iat}, our clock ${r.at})`);
+          offsets.push(r.at - iat);
+        }
       }
-      return bad.length
-        ? FAIL(`iat fell outside our acceptance window of ${WINDOW_SECONDS}s plus ${SKEW_SECONDS}s of clock skew`, bad.slice(0, 3), hits)
-        : PASS(`iat was within ${WINDOW_SECONDS + SKEW_SECONDS}s on every request`);
+      if (!bad.length) return PASS(`iat was within ${WINDOW_SECONDS + SKEW_SECONDS}s on every request`);
+      // A constant offset across several requests is what a wrong clock looks like, on either
+      // side. Said only when it IS constant, so the sentence carries information: two requests
+      // off by wildly different amounts are not a clock.
+      const spread = offsets.length > 1 ? Math.max(...offsets) - Math.min(...offsets) : null;
+      const constant = offsets.length > 1 && spread <= SKEW_SECONDS;
+      return FAIL(`iat fell outside our acceptance window of ${WINDOW_SECONDS}s plus ${SKEW_SECONDS}s of clock skew`
+                  + (constant ? `; every one was off by about the same amount, within ${spread}s, which is what a wrong clock on either side looks like rather than a signing defect` : ""),
+                  bad.slice(0, 3), hits);
     },
   },
   {

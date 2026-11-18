@@ -273,9 +273,22 @@ export function createGrader(cfg) {
           res.end("");
           return;
         }
-        answer(res, record, 400, { error: "invalid_grant",
-          error_description: "this Company has issued no refresh token, and declares auth.disabled" },
-          { "cache-control": "no-store" });
+        // 3.2 says a Company in this state "answers every refresh with `invalid_grant`". A
+        // REFRESH. Answering invalid_grant to everything was wrong for the other cases, and
+        // RFC 6749 §5.2 names them: `unsupported_grant_type` is "The authorization grant type
+        // is not supported by the authorization server", and `invalid_request` covers a
+        // missing required parameter. The issuer's metadata lists only refresh_token, so any
+        // other grant is unsupported by this Company's own declaration.
+        const form = new URLSearchParams(record.body ?? "");
+        const grant = form.get("grant_type");
+        if (!grant)
+          answer(res, record, 400, { error: "invalid_request", error_description: "grant_type is required (RFC 6749 §4.1.3)" }, { "cache-control": "no-store" });
+        else if (grant !== "refresh_token")
+          answer(res, record, 400, { error: "unsupported_grant_type", error_description: "this issuer lists refresh_token only (3.2, RFC 6749 §5.2)" }, { "cache-control": "no-store" });
+        else if (!form.get("refresh_token"))
+          answer(res, record, 400, { error: "invalid_request", error_description: "refresh_token is required (RFC 6749 §6)" }, { "cache-control": "no-store" });
+        else
+          answer(res, record, 400, { error: "invalid_grant", error_description: "this Company has issued no refresh token, and declares auth.disabled (3.2)" }, { "cache-control": "no-store" });
         return;
       }
 

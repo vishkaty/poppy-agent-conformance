@@ -520,6 +520,8 @@ test("health says what a 404 cannot: which process this is and since when", asyn
     assert.equal(res.status, 200);
     const h = await res.json();
     assert.ok(Number.isInteger(h.started_at), "no process start time");
+    assert.ok(Number.isInteger(h.clock), "health does not report this process's clock");
+    assert.ok(Math.abs(h.clock - Math.floor(Date.now() / 1000)) < 5, "the clock reported is not now");
     assert.equal(h.protocol_version, "1.0");
     assert.equal(h.lease_held, false);
     const { token } = await (await fetch(`${base}/grader/runs`, { method: "POST" })).json();

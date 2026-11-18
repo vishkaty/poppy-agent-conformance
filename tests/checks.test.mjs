@@ -149,3 +149,28 @@ test("two Poppy-Session headers break the same rule as a header that is not a JW
   assert.equal(w.verdict, "FAIL", `${w.verdict}: ${w.why}`);
   assert.match(w.evidence.join(" "), /not a JWT/, w.evidence.join(" "));
 });
+
+test("an iat failure shows both clocks, and says when every request is off by the same amount", async () => {
+  // The grader compares the agent's iat with its own clock, and the canary signs with that same
+  // clock, so a deployment whose clock has drifted fails every conforming agent while its own
+  // control passes. That cannot be gated from inside; it can be disclosed. So the failure
+  // carries both numbers, and when every offset is about the same it says what that looks like.
+  const keys = await f.agentKeys();
+  const at = Math.floor(Date.now() / 1000);
+  const drifted = [await f.request(keys, { at, iat: at - 600 }),
+                   await f.request(keys, { at, iat: at - 601 }),
+                   await f.request(keys, { at, iat: at - 599 })];
+  const v = grade(drifted, f.ctx).find(x => x.id === "session.iat-window");
+  assert.equal(v.verdict, "FAIL");
+  assert.match(v.evidence.join(" "), /\b\d{9,}\b.*\b\d{9,}\b/,
+    `the evidence does not show both the agent's iat and our clock: ${v.evidence.join(" | ")}`);
+  assert.match(v.why, /same amount|constant|clock/i,
+    `the failure does not mention that a constant offset looks like a clock: ${v.why}`);
+
+  // and a single scattered failure must NOT claim a clock problem
+  const scattered = [await f.request(keys, { at, iat: at - 600 }),
+                     await f.request(keys, { at, iat: at - 50_000 })];
+  const w = grade(scattered, f.ctx).find(x => x.id === "session.iat-window");
+  assert.equal(w.verdict, "FAIL");
+  assert.ok(!/same amount|constant/i.test(w.why), `offsets that differ were called constant: ${w.why}`);
+});

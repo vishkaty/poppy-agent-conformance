@@ -55,7 +55,11 @@ export const REACH = Object.fromEntries([
   ...PAIRWISE.map(c => [c.id, { how: "Drive the same User through your agent at BOTH Companies, so at least one request with a Session header reaches each. Their identifiers differ, so the rule applies." }]),
 ]);
 REACH["session.ath"] = { reachable: false,
-  how: "This grader issues no access tokens, so a conforming agent has nothing to send here and this outcome is expected. The rule is judged only if you point a signed-in code path at it with a token of your own; the grader compares ath with the SHA-256 of whatever Authorization value it receives." };
+  // Kept truthful after enforcement: a request carrying a token IS answered 401 now, because
+  // section 7 makes a token this Company never issued an invalid_token, and 4.5 requires the
+  // challenge. The rule is still judged, because the verdict comes from the recorded request
+  // and not from what we answered.
+  how: "This grader issues no access tokens, so a conforming agent has nothing to send here and this outcome is expected. You can still reach the rule by pointing a signed-in code path at it with a token of your own: the request is answered 401 invalid_token, because a token this Company never issued is invalid, and the rule is judged from the request anyway, comparing ath with the SHA-256 of whatever Authorization value arrived." };
 REACH["session.not-on-documents"] = { how: "Let your agent do discovery against this grader: fetch /.well-known/poppy.json and the OAuth metadata. The rule reads whether a Session JWT went to any of them, which it must not." };
 REACH["session.header-jwt"] = { how: "Send a request to a listed destination with a Poppy-Session header. The rule reads whether exactly one header arrived and whether its value is a JWT, so any such request judges it." };
 REACH["delegation.alg"] = { how: "Send a request whose Session JWT carries a delegation. The rule reads the delegation's own alg, which 1.0 limits to ES256 and PS384." };
@@ -176,6 +180,21 @@ export function buildReport(run) {
   const ordinalOf = new Map();
   const requests = all.map(({ r }, i) => { ordinalOf.set(r, i + 1); return redactRecord(r, i + 1, runToken); });
 
+  // What this Company REFUSED, and whether its refusal is why the run stopped.
+  //
+  // Enforcement introduced a way for this report to lie. Section 7 tells an agent that gets
+  // invalid_session to stop sending the request until it fixes the cause, so a run can end at
+  // its first request, and every rule after it is unreached. The advice beside an unreached
+  // rule tells the builder to drive their agent so that it reaches the rule, which they did:
+  // we refused it. So a run whose LAST recorded request was refused, with nothing after it,
+  // says so, and says it in place of that advice.
+  const rejected = all.filter(({ r }) => r.rejection).length;
+  const last = all.length ? all[all.length - 1].r : null;
+  const stoppedBy = last?.rejection ?? null;
+  const stopped = stoppedBy
+    ? `The last request this grader saw, #${ordinalOf.get(last)}, was refused under ${stoppedBy.rule} with ${stoppedBy.error}, and nothing followed it. Section 7 tells a Personal Agent that receives ${stoppedBy.error} to stop sending the request until it fixes the cause, so the rules below that were not reached may be unreached because this Company stopped your agent there, and not because your agent does not implement them. Fix that one request and run again.`
+    : null;
+
   const perA = grade(A.log, A.ctx), perB = grade(B.log, B.ctx);
   const byId = id => [
     { company: A.ctx.identifier, ...perA.find(x => x.id === id) },
@@ -184,18 +203,28 @@ export function buildReport(run) {
                 evidence: v.evidence ?? [],
                 decidedBy: (v.decidedBy ?? []).map(r => ordinalOf.get(r)).filter(Boolean) }));
 
+  const reachFor = (id) => {
+    const base = REACH[id];
+    if (!stopped) return base;
+    // Not appended to the old advice: the old advice is wrong here, so it is replaced. What is
+    // kept is the note for a rule this grader cannot offer at all, which is our limit and not
+    // a consequence of the refusal.
+    if (base?.reachable === false) return base;
+    return { ...base, how: stopped };
+  };
+
   const rules = CHECKS.map(c => {
     const perCompany = byId(c.id);
     const worst = worstOf(perCompany.map(v => v.verdict));
     return { id: c.id, section: c.section, quote: c.quote, anchor: anchorFor(c.section),
              link: specLink(c.section), perCompany, worst,
-             reach: worst === "INCONCLUSIVE" ? REACH[c.id] : null,
+             reach: worst === "INCONCLUSIVE" ? reachFor(c.id) : null,
              threshold: c.id === "session.iat-window" ? `${WINDOW_SECONDS} s plus ${SKEW_SECONDS} s of clock skew` : null };
   });
   const pairwise = gradePair(A.log, B.log, A.ctx, B.ctx).map(v => ({
     id: v.id, section: v.section, quote: v.quote, anchor: anchorFor(v.section), link: specLink(v.section),
     verdict: v.verdict, cause: v.cause ?? null, why: v.why, evidence: v.evidence ?? [],
-    reach: v.verdict === "INCONCLUSIVE" ? REACH[v.id] : null,
+    reach: v.verdict === "INCONCLUSIVE" ? reachFor(v.id) : null,
   }));
 
   const count = v => rules.filter(r => r.worst === v).length + pairwise.filter(p => p.verdict === v).length;
@@ -206,6 +235,10 @@ export function buildReport(run) {
     unjudged: [...rules.filter(r => r.worst === "INCONCLUSIVE" && r.perCompany.some(c => c.cause === "grader")),
                ...pairwise.filter(p => p.verdict === "INCONCLUSIVE" && p.cause === "grader")].length,
     rules: rules.length + pairwise.length, requests: requests.length,
+    // Requests this Company refused rather than answered. Counted here because a report whose
+    // failures all come from refused requests is a different thing from one whose failures came
+    // from requests that were served.
+    rejected,
     // How many places this run's traffic came from. One is the ordinary case. More than one
     // means something that is not the builder's agent reached the grader while they held the
     // lease, which no amount of attribution can prevent and which they have to be told,
@@ -255,6 +288,9 @@ export function buildReport(run) {
         incompleteBodies: all.filter(({ r }) => r.bodyComplete === false).length,
       },
       warnings: run.warnings ?? [],
+      // Said when this Company's own refusal is why the run ended, and null otherwise, so a
+      // report never carries this excuse unless it earned it.
+      stopped,
       sources: summary.sources > 1
         ? `This run's requests came from ${summary.sources} different sources. One agent is graded at a time, but anything that can reach these hostnames can send a request, so a request here may not be yours: a scanner probing the hostname, or an earlier run's agent still polling. The request index shows a salted source per request, so you can tell which are yours.`
         : null,
@@ -347,6 +383,7 @@ export function renderHtml(rep) {
         ? `<p>Requests from ${rep.run.issuers.length} client_ids reached the grader during this run; verdicts cover all of them. The request index shows which.</p>` : "")
     // Both of these go ABOVE the verdicts rather than in the About section, because each is
     // an explanation of a verdict a builder is about to read and disagree with.
+    + (a.stopped ? `<p><strong>${esc(a.stopped)}</strong></p>` : "")
     + (a.sources ? `<p>${esc(a.sources)}</p>` : "")
     + (a.beforeLease ? `<p>${esc(a.beforeLease)}</p>` : "")
     + `<h2>Failed</h2>${rules[0] || "<p>Nothing failed.</p>"}`

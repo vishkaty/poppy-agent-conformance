@@ -332,3 +332,59 @@ test("the page carries the same provenance as the data", async () => {
                                ["the specification version", rep.spec.version]])
     assert.ok(html.includes(String(value)), `the page does not carry ${what} (${value})`);
 });
+
+test("when a rejection ended the run, the report says so instead of blaming the agent", async () => {
+  // Enforcement introduced a way for this report to lie. Section 7 tells an agent that gets
+  // invalid_session to stop sending the request until it fixes the cause, so a run can end at
+  // its first request. Every rule after that is unreached, and the advice beside an unreached
+  // rule says "drive your agent so that it sends a Session header on a listed destination",
+  // which the builder DID: we refused it. The report has to attribute that.
+  const keys = await f.agentKeys();
+  const bad = await f.request(keys, { noDlg: true });
+  bad.response = { status: 400, error: "invalid_session" };
+  bad.rejection = { rule: "delegation.present", error: "invalid_session" };
+
+  const rep = buildReport({ token: "t", started: 1, ended: 2, frozen: true, warnings: [],
+                            graderCommit: "x",
+                            companies: [{ ctx: CTX_A, log: [bad] }, { ctx: CTX_B, log: [] }] });
+
+  assert.equal(rep.summary.rejected, 1, "the report does not count what this Company refused");
+  assert.ok(rep.about.stopped, "the report does not say the run ended in a rejection");
+  assert.match(rep.about.stopped, /delegation\.present/, rep.about.stopped);
+  assert.match(rep.about.stopped, /nothing followed|stopped there/i, rep.about.stopped);
+
+  // and the unreached rules carry that sentence rather than advice the builder already followed
+  const unreached = rep.rules.filter(r => r.worst === "INCONCLUSIVE" && r.reach);
+  assert.ok(unreached.length > 0, "nothing was unreached, so this proves nothing");
+  const reachable = unreached.filter(r => r.reach.reachable !== false);
+  const ours = unreached.filter(r => r.reach.reachable === false);
+  assert.ok(reachable.length > 0 && ours.length > 0,
+    "this test needs both a rule the builder could have reached and one this grader cannot offer");
+  for (const r of reachable)
+    assert.match(r.reach.how, /refused|rejected|stopped/i,
+      `${r.id} still advises the builder to do what we refused: ${r.reach.how}`);
+  // A rule this grader cannot offer at all keeps its own note: that is our limit, not a
+  // consequence of the refusal, and overwriting it would blame the refusal for our gap.
+  for (const r of ours)
+    assert.ok(!/stopped your agent there/.test(r.reach.how),
+      `${r.id} is our own limit and was blamed on the refusal: ${r.reach.how}`);
+
+  const html = renderHtml(rep);
+  assert.match(html, /delegation\.present/);
+});
+
+test("a run that was not stopped by a rejection keeps the ordinary advice", async () => {
+  // The control. Without it the change above could blanket every report with an excuse.
+  const keys = await f.agentKeys();
+  const ok = await f.request(keys, {});
+  ok.response = { status: 200, error: null };
+  const rep = buildReport({ token: "t", started: 1, ended: 2, frozen: true, warnings: [],
+                            graderCommit: "x",
+                            companies: [{ ctx: CTX_A, log: [ok] }, { ctx: CTX_B, log: [] }] });
+  assert.equal(rep.summary.rejected, 0);
+  assert.equal(rep.about.stopped, null);
+  const unreached = rep.rules.filter(r => r.worst === "INCONCLUSIVE" && r.reach);
+  assert.ok(unreached.length > 0);
+  assert.ok(unreached.every(r => !/refused|rejected|stopped/i.test(r.reach.how)),
+    "a run nobody refused was told it had been stopped");
+});

@@ -401,7 +401,11 @@ export function createRig(cfg = {}) {
     if (path === CONTROL_PREFIX + "health" && (m === "GET" || m === "HEAD")) {
       // Reports live in memory, so a restart answers every token with the bytes of an
       // unknown path. This is how a builder tells those apart. It names no token.
-      json(res, 200, { ok: true, started_at: startedAt, grader_commit: graderCommit,
+      // `clock` is here because session.iat-window compares an agent's iat with this
+      // process's own clock, and the canary signs with that same clock, so a drifted
+      // deployment fails every conforming agent while its own control passes. Nothing inside
+      // can detect that; an operator comparing this number with any other can.
+      json(res, 200, { ok: true, started_at: startedAt, clock: now(), grader_commit: graderCommit,
                        protocol_version: "1.0", lease_held: !!liveRun(),
                        companies: graders.map(g => g.config.origin) });
       return true;
