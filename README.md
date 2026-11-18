@@ -383,8 +383,16 @@ failures named every request in the run rather than the ones that breached, beca
 had dropped the request while iterating the delegations. And a method mismatch on a real
 destination answered 404, telling an agent its endpoint was wrong when it was not.
 
-In the other direction, our rules caught every breach their validator sent: thirteen failures,
+In the other direction, our rules caught every breach their validator sent: fourteen failures,
 each matching one of its probes, and no conforming request failed.
+
+Their validator and this Company disagree about one thing, and the disagreement is recorded
+here rather than resolved by changing our answer. 3.2 says a Company that sets `auth.disabled`
+and has never issued a refresh token "answers every refresh with `invalid_grant`... It MAY do
+so without verifying the client assertion". This Company is in that state and answers exactly
+that. Their client assertion checks treat `invalid_grant` as proof the assertion was accepted,
+and so report five MUST failures at the token endpoint. We follow the sentence. The remaining
+disagreement in their report, beyond the conversation routes, is those five.
 
 ## Keeping up with the specification
 
