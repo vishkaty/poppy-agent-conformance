@@ -19,6 +19,12 @@
 import { createHash, randomBytes } from "node:crypto";
 
 const id = (prefix) => `${prefix}_${randomBytes(9).toString("base64url")}`;
+
+// 8.2: "Conversation IDs, request IDs, message IDs, and event IDs are strings of 1 to 256
+// characters from the URL-safe base64 alphabet (RFC 4648, section 5): letters, digits, `-`,
+// and `_`." 8.13 lists "an ID with characters not allowed (8.2)" under invalid_request.
+const ID_OK = /^[A-Za-z0-9_-]{1,256}$/;
+const validId = (v) => typeof v === "string" && ID_OK.test(v);
 const nowIso = () => new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
 const hash = (s) => createHash("sha256").update(String(s)).digest("hex");
 
@@ -27,10 +33,12 @@ const ERRORS = {
   conversation_not_found: 404,
   conversation_closed: 409,
   request_id_conflict: 409,
+  direct_conversation_open: 409,
   invalid_cursor: 400,
   invalid_request: 400,
 };
-const fail = (error, detail) => ({ status: ERRORS[error], body: { error, ...(detail ? { error_description: detail } : {}) } });
+const fail = (error, detail, extra = {}) =>
+  ({ status: ERRORS[error], body: { error, ...extra, ...(detail ? { error_description: detail } : {}) } });
 
 export function createConversations({ max = 200 } = {}) {
   const store = new Map();          // conversation id -> conversation
@@ -57,10 +65,15 @@ export function createConversations({ max = 200 } = {}) {
   const hasContent = (m) => !!m && typeof m === "object"
     && ["text", "data", "context", "extensions"].some(k => m[k] !== undefined);
 
-  function record(c, message) {
-    // 8.4: the Company sets `role`, and ignores an `id` or `role` the agent sent.
+  // 8.2: "The Personal Agent chooses request IDs, and each of its messages has its request's
+  // ID", and 8.4 says the same of the `id` field: "the request's ID for the Personal Agent's
+  // messages (8.3)". This minted a fresh id instead, so an agent that sent a message and then
+  // looked for it among the events could not find it, and three checks in the authors own
+  // validator failed with "no message event with id ...".
+  function record(c, message, requestId) {
+    // 8.4: the Company sets `id` and `role`, "and the Company ignores them if sent".
     const { id: _ignored, role: _alsoIgnored, ...rest } = message;
-    return add(c, { type: "message", message: { id: id("msg"), role: "user", ...rest } });
+    return add(c, { type: "message", message: { id: requestId, role: "user", ...rest } });
   }
 
   const say = (c, text) => add(c, { type: "message",
@@ -82,8 +95,13 @@ export function createConversations({ max = 200 } = {}) {
     const isPost = route !== "events";
     let reqKey = null;
     if (isPost) {
-      if (!body || typeof body !== "object" || Array.isArray(body) || typeof body.id !== "string" || !body.id)
-        return fail("invalid_request", "every POST carries a JSON body with a request id (8.3)");
+      if (!body || typeof body !== "object" || Array.isArray(body))
+        return fail("invalid_request", "every POST carries a JSON body (8.2)");
+      // One gate for the id, covering absent, wrong type and outside the alphabet. A separate
+      // "is it a non-empty string" check first was redundant once this existed, and a guard no
+      // mutation can kill is either dead code or an untested check.
+      if (!validId(body.id))
+        return fail("invalid_request", "every POST carries a request id of 1 to 256 characters of letters, digits, - and _ (8.2, 8.3)");
       reqKey = `${owner}\u0000${body.id}`;
       const seen = requests.get(reqKey);
       if (seen) {
@@ -100,11 +118,33 @@ export function createConversations({ max = 200 } = {}) {
     if (route === "create") {
       if (!hasContent(body.message))
         return fail("invalid_request", "a new conversation starts with its first message (8.3), and a message has at least one of text, data, context or extensions (8.4)");
+
+      // 8.10, the create path of a Direct Conversation. Only this path: the Company asking to
+      // talk with the User, by adding a `user_requested` event, is out of scope because this
+      // Company never asks. Validating the parent is not optional even so, because accepting
+      // the request and treating it as an ordinary conversation tells the agent it has a
+      // Direct Conversation when it has not.
+      const parentId = body.parent_conversation_id;
+      let parent = null;
+      if (parentId !== undefined) {
+        if (!validId(parentId))
+          return fail("invalid_request", "a conversation id is 1 to 256 characters of letters, digits, - and _ (8.2)");
+        parent = store.get(parentId);
+        // 8.10: "`conversation_not_found` for an unknown parent or one with a different owner".
+        if (!parent || parent.owner !== owner) return fail("conversation_not_found");
+        if (parent.closed) return fail("conversation_closed");
+        if (parent.parent) return fail("invalid_request", "a Direct Conversation cannot be the parent of another (8.10)");
+        const open = [...store.values()].find(x => x.parent === parentId && !x.closed);
+        // 8.10: "`direct_conversation_open` for one that already has an open Direct
+        // Conversation", and 8.13 puts the open one in `conversation_id`.
+        if (open) return fail("direct_conversation_open", undefined, { conversation_id: open.id });
+      }
+
       const cid = id("cnv");
-      const c = { id: cid, owner, events: [], closed: false };
+      const c = { id: cid, owner, events: [], closed: false, parent: parentId ?? null };
       store.set(cid, c);
       prune();
-      record(c, body.message);
+      record(c, body.message, body.id);
       return remember({ status: 201, body: { conversation_id: cid } });
     }
 
@@ -114,6 +154,12 @@ export function createConversations({ max = 200 } = {}) {
     if (!c || c.owner !== owner) return fail("conversation_not_found");
 
     if (route === "events") {
+      // 8.13 lists "a `wait` that isn't a whole number of seconds" under invalid_request.
+      // This Company answers at once, which 8.5 allows ("It MAY return sooner"), but it still
+      // has to reject a wait it could not have honoured.
+      const wait = query.get("wait");
+      if (wait !== null && !/^\d+$/.test(wait))
+        return fail("invalid_request", "wait is a whole number of seconds (8.13)");
       const cursor = query.get("cursor");
       let from = 0;
       if (cursor) {
@@ -147,7 +193,7 @@ export function createConversations({ max = 200 } = {}) {
     if (route === "messages") {
       if (!hasContent(body.message))
         return fail("invalid_request", "a message has at least one of text, data, context or extensions (8.4)");
-      record(c, body.message);
+      record(c, body.message, body.id);
       return remember({ status: 202, body: { conversation_id: c.id } });
     }
 

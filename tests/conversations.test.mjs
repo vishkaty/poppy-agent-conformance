@@ -231,3 +231,127 @@ test("the conversation routes are still recorded and judged like any destination
       assert.equal(r.response.status < 400, true, `${r.method} ${r.path} answered ${r.response.status}`);
   });
 });
+
+test("a recorded message keeps the request's own id, because 8.3 says that is its id", async () => {
+  // 8.2: "The Personal Agent chooses request IDs, and each of its messages has its request's
+  // ID." 8.4 repeats it for the `id` field: "the request's ID for the Personal Agent's
+  // messages (8.3)". This Company minted a fresh id instead, so an agent that sent a message
+  // and then looked for it in the events could not find it. Three checks in the authors own
+  // validator failed on exactly that, all reading "no message event with id ...".
+  await company(async (g) => {
+    const a = await agent(g.config.origin);
+    const sent = { id: "req_Ab-_09", message: { author: { type: "agent" }, text: "keep my id",
+                                                data: { n: [1, 2] }, context: { user_available: false } } };
+    const id = (await a.call("POST", a.endpoint, sent)).body.conversation_id;
+    const read = await a.call("GET", `${a.endpoint}/${id}/events`);
+    const mine = read.body.events.find(e => e.type === "message" && e.message.id === sent.id);
+    assert.ok(mine, `no message event with id ${sent.id}: ${JSON.stringify(read.body.events)}`);
+    assert.equal(mine.message.role, "user");
+    // 8.5: the event "holds the message as it was sent, with its author, text, data, and
+    // context, plus role".
+    assert.deepEqual(mine.message.author, sent.message.author);
+    assert.equal(mine.message.text, sent.message.text);
+    assert.deepEqual(mine.message.data, sent.message.data);
+    assert.deepEqual(mine.message.context, sent.message.context);
+
+    // and a message with ONLY context is still recorded (8.4 permits it, 8.5 records it)
+    const second = await a.call("POST", `${a.endpoint}/${id}/messages`,
+      { id: "req_contextonly", message: { context: { locale: "en-GB" } } });
+    assert.equal(second.status, 202, second.text);
+    const after = await a.call("GET", `${a.endpoint}/${id}/events`);
+    assert.ok(after.body.events.some(e => e.message?.id === "req_contextonly"),
+      "a message carrying only context was not recorded");
+  });
+});
+
+test("an id outside the alphabet 8.2 defines is invalid_request, and 256 characters is allowed", async () => {
+  // 8.2: "Conversation IDs, request IDs, message IDs, and event IDs are strings of 1 to 256
+  // characters from the URL-safe base64 alphabet (RFC 4648, section 5): letters, digits, `-`,
+  // and `_`." 8.13 lists "an ID with characters not allowed (8.2)" under invalid_request.
+  await company(async (g) => {
+    const a = await agent(g.config.origin);
+    const ok = await a.call("POST", a.endpoint, { id: "A".repeat(256), message: { text: "x" } });
+    assert.equal(ok.status, 201, `a 256 character id was refused: ${ok.text}`);
+
+    for (const [what, reqId] of [["257 characters", "A".repeat(257)],
+                                 ["a slash", "req/one"],
+                                 ["a space", "req one"],
+                                 ["a plus", "req+one"],
+                                 ["empty", ""]]) {
+      const res = await a.call("POST", a.endpoint, { id: reqId, message: { text: "x" } });
+      assert.equal(res.status, 400, `${what}: ${res.status} ${res.text}`);
+      assert.equal(res.body?.error, "invalid_request", what);
+    }
+  });
+});
+
+test("a wait that is not a whole number of seconds is invalid_request", async () => {
+  // 8.13: "invalid_request | 400 | The request is malformed, such as ... a `wait` that isn't a
+  // whole number of seconds."
+  await company(async (g) => {
+    const a = await agent(g.config.origin);
+    const id = (await a.call("POST", a.endpoint, { id: "r1", message: { text: "x" } })).body.conversation_id;
+    for (const wait of ["1.5", "soon", "-1", "", "1e3"]) {
+      const res = await a.call("GET", `${a.endpoint}/${id}/events?wait=${encodeURIComponent(wait)}`);
+      assert.equal(res.status, 400, `wait=${wait}: ${res.status} ${res.text}`);
+      assert.equal(res.body?.error, "invalid_request", `wait=${wait}`);
+    }
+    // and a whole number is fine, answered at once because 8.5 says it MAY return sooner
+    const fine = await a.call("GET", `${a.endpoint}/${id}/events?wait=30`);
+    assert.equal(fine.status, 200, fine.text);
+  });
+});
+
+test("a Direct Conversation is linked to its parent, and refused in the four ways 8.10 names", async () => {
+  // 8.10: "The parent conversation MUST be open, belong to the same owner (8.2), and not be a
+  // Direct Conversation itself. It can have one open Direct Conversation at a time. Otherwise
+  // the Company returns `conversation_not_found` for an unknown parent or one with a different
+  // owner, `conversation_closed` for a closed one, `invalid_request` for one that is a Direct
+  // Conversation, and `direct_conversation_open` for one that already has an open Direct
+  // Conversation."
+  //
+  // The create path only. The Company asking to talk with the User (a `user_requested` event)
+  // is out of scope: this Company never asks.
+  await company(async (g) => {
+    const a = await agent(g.config.origin);
+    const start = async (over) => a.call("POST", a.endpoint,
+      { id: `r_${Math.random().toString(36).slice(2, 10)}`,
+        message: { author: { type: "human" }, text: "direct" }, ...over });
+
+    const parent = (await start({ message: { text: "parent" } })).body.conversation_id;
+
+    const direct = await start({ parent_conversation_id: parent });
+    assert.equal(direct.status, 201, direct.text);
+    const directId = direct.body.conversation_id;
+    assert.notEqual(directId, parent);
+
+    // one at a time
+    const second = await start({ parent_conversation_id: parent });
+    assert.equal(second.status, 409, second.text);
+    assert.equal(second.body.error, "direct_conversation_open");
+    assert.equal(second.body.conversation_id, directId,
+      "8.10 names the open Direct Conversation in conversation_id");
+
+    // a Direct Conversation cannot itself be a parent
+    const nested = await start({ parent_conversation_id: directId });
+    assert.equal(nested.status, 400, nested.text);
+    assert.equal(nested.body.error, "invalid_request");
+
+    // unknown parent, and a parent belonging to someone else: both not found
+    const unknown = await start({ parent_conversation_id: "cnv_nope" });
+    assert.equal(unknown.status, 404, unknown.text);
+    assert.equal(unknown.body.error, "conversation_not_found");
+    const other = await agent(g.config.origin, { sub: "another-user" });
+    const theirs = await other.call("POST", other.endpoint,
+      { id: "r_other", message: { text: "x" }, parent_conversation_id: parent });
+    assert.equal(theirs.status, 404, theirs.text);
+    assert.deepEqual(theirs.body, unknown.body, "the two 404s are distinguishable");
+
+    // a closed parent
+    await a.call("POST", `${a.endpoint}/${directId}/close`, { id: "r_closedirect" });
+    await a.call("POST", `${a.endpoint}/${parent}/close`, { id: "r_closeparent" });
+    const afterClose = await start({ parent_conversation_id: parent });
+    assert.equal(afterClose.status, 409, afterClose.text);
+    assert.equal(afterClose.body.error, "conversation_closed");
+  });
+});
