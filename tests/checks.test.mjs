@@ -174,3 +174,113 @@ test("an iat failure shows both clocks, and says when every request is off by th
   assert.equal(w.verdict, "FAIL");
   assert.ok(!/same amount|constant/i.test(w.why), `offsets that differ were called constant: ${w.why}`);
 });
+
+test("a delegation signed by a key the agent published verifies, with or without a kid", async () => {
+  // 5.2 step 1: "Find the key in the Personal Agent's `jwks_uri` named by the delegation's
+  // `kid`, and verify the delegation's signature with it."
+  //
+  // The sentence says `kid` NAMES the key, with no requirement word, and the authors' own
+  // signer omits `kid` whenever the root key has none, which is every key its generateKey()
+  // makes. Measured. So a check that failed a delegation for a missing `kid` would fail the
+  // code of the people who wrote the specification, and tests/reference.test.mjs would catch
+  // it. Match by the `kid` member, then by thumbprint, then by any key whose type fits the alg.
+  const ref = await import("../reference/jose.ts");
+  const ISS = "https://agent.example/agent.json";
+  const operator = await ref.generateKey(), key = await ref.generateKey();
+  const kid = await ref.thumbprint(operator.publicJwk);
+
+  for (const [what, header] of [["no kid, as their signer writes it", {}],
+                                ["a kid that is the thumbprint", { kid }],
+                                ["a kid the key set carries as a member", { kid: "k1" }]]) {
+    const dlg = await ref.signDelegation({ root: operator, delegated: key.publicJwk, iss: ISS, ...header });
+    const published = header.kid === "k1"
+      ? [{ ...operator.publicJwk, kid: "k1" }]
+      : [{ ...operator.publicJwk, kid }];
+    const r = await f.request(keys, { dlgCompact: dlg, claims: { iss: ISS } });
+    r.issuerKeys = { outcome: "ok", iss: ISS, jwksUri: "https://agent.example/jwks.json",
+                     keys: published, kids: published.map(k => k.kid), source: "fetch",
+                     fetchedAt: Math.floor(Date.now() / 1000), ageSeconds: 0 };
+    const v = grade([r], f.ctx).find(x => x.id === "delegation.signature");
+    assert.equal(v.verdict, "PASS", `${what}: ${v.verdict} ${v.why}`);
+    assert.match(v.why, /jwks\.json/, `${what}: the pass does not say where the key came from`);
+  }
+});
+
+test("a delegation nobody published is a failure, which is the forgery this closes", async () => {
+  // Today a Session JWT is verified against whatever key its delegation names, and the
+  // delegation itself is taken at its word, so a stranger can mint one claiming any client_id.
+  const ref = await import("../reference/jose.ts");
+  const ISS = "https://agent.example/agent.json";
+  const real = await ref.generateKey(), forged = await ref.generateKey(), key = await ref.generateKey();
+  const dlg = await ref.signDelegation({ root: forged, delegated: key.publicJwk, iss: ISS });
+  const r = await f.request(keys, { dlgCompact: dlg, claims: { iss: ISS } });
+  r.issuerKeys = { outcome: "ok", iss: ISS, jwksUri: "https://agent.example/jwks.json",
+                   keys: [{ ...real.publicJwk, kid: "k1" }], kids: ["k1"], source: "fetch",
+                   fetchedAt: 1000, ageSeconds: 0 };
+  const v = grade([r], f.ctx).find(x => x.id === "delegation.signature");
+  assert.equal(v.verdict, "FAIL", `${v.verdict}: ${v.why}`);
+  assert.match(v.evidence.join(" "), /k1|no key/, v.evidence.join(" "));
+});
+
+test("whose fault the fetch was decides whether the rule fails or abstains", async () => {
+  const ISS = "https://agent.example/agent.json";
+  const cases = [
+    ["agent", "FAIL", null],
+    ["server", "INCONCLUSIVE", "unreached"],
+    ["grader", "INCONCLUSIVE", "grader"],
+  ];
+  for (const [outcome, verdict, cause] of cases) {
+    const r = await f.request(keys, { claims: { iss: ISS } });
+    r.issuerKeys = { outcome, iss: ISS, detail: `the ${outcome} said so`, keys: [], kids: [] };
+    const v = grade([r], f.ctx).find(x => x.id === "delegation.signature");
+    assert.equal(v.verdict, verdict, `${outcome}: ${v.verdict} ${v.why}`);
+    if (cause) assert.equal(v.cause, cause, outcome);
+    // the reason reaches the builder either as the headline or as the evidence beside it
+    const said = v.why + " " + (v.evidence ?? []).join(" ");
+    assert.match(said, /the .* said so/, `${outcome}: the verdict does not carry the reason: ${said}`);
+  }
+  // and with nothing attached at all, meaning this grader never looked, it abstains as our
+  // own limit rather than failing anybody. The fixture attaches a fetched key set by default,
+  // because that is the ordinary case, so this asks for the other one explicitly.
+  const bare = await f.request(keys, { claims: { iss: ISS }, noIssuerKeys: true });
+  const v = grade([bare], f.ctx).find(x => x.id === "delegation.signature");
+  assert.equal(v.verdict, "INCONCLUSIVE");
+  assert.equal(v.cause, "grader");
+});
+
+test("a verdict that depended on a cached fetch says so, with its age", async () => {
+  // A FAIL decided on a cache a builder cannot see cannot be argued with, which is the same
+  // principle the iat window follows by naming its own numbers.
+  const ref = await import("../reference/jose.ts");
+  const ISS = "https://agent.example/agent.json";
+  const operator = await ref.generateKey(), key = await ref.generateKey();
+  const dlg = await ref.signDelegation({ root: operator, delegated: key.publicJwk, iss: ISS });
+  const r = await f.request(keys, { dlgCompact: dlg, claims: { iss: ISS } });
+  r.issuerKeys = { outcome: "ok", iss: ISS, jwksUri: "https://agent.example/jwks.json",
+                   keys: [{ ...operator.publicJwk, kid: "k1" }], kids: ["k1"],
+                   source: "cache", fetchedAt: 1000, ageSeconds: 41 };
+  const v = grade([r], f.ctx).find(x => x.id === "delegation.signature");
+  assert.equal(v.verdict, "PASS", v.why);
+  assert.match(v.why, /cached/i, `the verdict hides that it used a cache: ${v.why}`);
+  assert.match(v.why, /41/, `the verdict hides the age of the cache: ${v.why}`);
+});
+
+test("an iss that is not an HTTPS URL is its own failure, with section 3's sentence", async () => {
+  // Section 3: "Every URL this protocol defines or exchanges MUST be an HTTPS URL ... Companies
+  // MUST reject one from a Personal Agent." It is decidable with no network, it is the
+  // precondition of the fetch, and it needs its own quote: "find the key in the jwks_uri" is
+  // the wrong sentence for a scheme defect.
+  for (const [iss, verdict] of [["http://agent.example/agent.json", "FAIL"],
+                                ["ftp://agent.example/a", "FAIL"],
+                                ["not-a-url", "FAIL"],
+                                ["https://agent.example/agent.json", "PASS"]]) {
+    const r = await f.request(keys, { claims: { iss } });
+    const v = grade([r], f.ctx).find(x => x.id === "session.iss-https");
+    assert.equal(v.verdict, verdict, `${iss}: ${v.verdict} ${v.why}`);
+  }
+  // and delegation.signature stands aside for it rather than reporting the same thing twice
+  const r = await f.request(keys, { claims: { iss: "http://agent.example/agent.json" } });
+  const v = grade([r], f.ctx).find(x => x.id === "delegation.signature");
+  assert.equal(v.verdict, "INCONCLUSIVE", `${v.verdict}: ${v.why}`);
+  assert.match(v.why, /iss-https/, v.why);
+});

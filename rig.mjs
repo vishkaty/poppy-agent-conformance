@@ -30,7 +30,7 @@ const MAX_PER_COMPANY = 2000;
 // Every id in CHECKS and PAIRWISE must appear here or in CANARY_EXCLUDED, and a test
 // enforces that, so a new check cannot be forgotten by either.
 export const CANARY_RULES = [
-  "session.header-sent", "session.header-jwt", "session.typ", "session.alg", "session.aud", "session.htm-htu",
+  "session.header-sent", "session.header-jwt", "session.iss-https", "session.typ", "session.alg", "session.aud", "session.htm-htu",
   "session.iat-window", "session.claims-present", "session.sub-stable", "session.jti-unique",
   "session.signature", "session.not-on-documents",
   "delegation.present", "delegation.typ", "delegation.alg", "delegation.exp-24h",
@@ -38,6 +38,18 @@ export const CANARY_RULES = [
   "delegation.no-private-key", "version.constant", "version.sent",
   "pairwise.user-id", "pairwise.delegated-key",
 ];
+
+// Rules the canary expects to ABSTAIN, with the cause each must carry.
+//
+// `delegation.signature` is here rather than above because a deployment that does not fetch
+// the agent's documents cannot verify a delegation, and the honest outcome is an abstention
+// with cause "grader". Requiring a PASS would be satisfied by a grader that fetched nothing
+// and said everything was fine, which is the vacuous pass this gate exists to prevent, and
+// excluding it entirely would let the rule rot into an abstention nobody notices. So both
+// branches assert: PASS when this deployment fetches, this cause when it does not.
+export const CANARY_ABSTAINS = {
+  "delegation.signature": "grader",
+};
 export const CANARY_EXCLUDED = {
   "session.ath": "This grader issues no access tokens, so the canary has none to bind and a "
     + "conforming agent would send no ath here. The rule is judged only for a builder who "
@@ -79,24 +91,41 @@ export function firstRefusedLeg(legs) {
 // Their TypeScript is imported directly, as their own validator runs it. An import failure
 // is not caught and skipped: a control that quietly opts out is the vacuous pass this file
 // exists to prevent, so the gate above turns it into a refusal to grade.
-async function driveCanary(graders, ports, collector, { publicBase, module: mod }) {
+async function driveCanary(graders, ports, collector, { publicBase, module: mod, verifies,
+                                                        send: sendRequest = globalThis.fetch }) {
   const ref = await import(mod);
   for (let i = 0; i < graders.length; i++) {
     const d = graders[i].config.discovery;
     const pub = publicOriginOf(d);
     const ctx = ctxOf(d);
-    const send = `http://127.0.0.1:${ports[i]}`;
+    const sendBase = `http://127.0.0.1:${ports[i]}`;
 
     // One identity per Company, which is what a correct agent does: its own User ID and its
     // own delegated key, which is exactly what the two pairwise rules read.
     const operator = await ref.generateKey();
     const key = await ref.generateKey();
+
+    // Where this canary's client metadata lives. When this deployment verifies delegations
+    // against the agent's jwks_uri, the canary PUBLISHES its operator key on the Company it
+    // drives and names that URL as its iss, so the verifier fetches it exactly as it fetches a
+    // builder's. Otherwise the iss stays a name that resolves nowhere, and the gate requires
+    // delegation.signature to abstain rather than pass, which is the other half of the
+    // assertion: a pass with no key set would be a statement about nothing.
+    const clientId = verifies ? graders[i].canaryClientId : CANARY_CLIENT_ID;
+    if (verifies) {
+      const kid = await ref.thumbprint(operator.publicJwk);
+      graders[i].setCanaryIdentity({
+        "agent.json": { client_id: clientId, jwks_uri: new URL("./jwks.json", clientId).toString() },
+        "jwks.json": { keys: [{ ...operator.publicJwk, kid }] },
+      });
+    }
+
     const delegation = await ref.signDelegation({ root: operator, delegated: key.publicJwk,
-                                                  iss: CANARY_CLIENT_ID });
+                                                  iss: clientId });
     const sub = ref.randomId(16), sid = ref.randomId(16);
 
     // The exclusion of 5.2: documents carry no Session header.
-    await fetch(`${send}/.well-known/poppy.json`).catch(() => {});
+    await sendRequest(`${sendBase}/.well-known/poppy.json`).catch(() => {});
 
     const op = (graders[i].config.apiOperations ?? []).find(o => String(o.method).toUpperCase() === "GET");
     // No compiled OpenAPI operation means the canary cannot send an API request at all, so
@@ -123,11 +152,11 @@ async function driveCanary(graders, ports, collector, { publicBase, module: mod 
       // the CONFIGURED one. Those are one variable in production, which is why the public
       // leg below exists: it is the only part of this control that is not a function of the
       // same configuration it is checking.
-      const jwt = await ref.signSessionJwt({ key, delegation, iss: CANARY_CLIENT_ID,
+      const jwt = await ref.signSessionJwt({ key, delegation, iss: clientId,
         aud: ctx.identifier, sid, sub, method: t.method, url: `${pub}${t.path}` });
       collector.minted.add(jwt);
       try {
-        const res = await fetch(`${base}${t.path}`, {
+        const res = await sendRequest(`${base}${t.path}`, {
           method: t.method, body: t.body,
           headers: { "poppy-session": jwt, "poppy-version": d.protocol_version,
                      ...(t.body ? { "content-type": "application/json" } : {}) },
@@ -140,7 +169,7 @@ async function driveCanary(graders, ports, collector, { publicBase, module: mod 
       return jwt;
     };
 
-    for (const t of targets) await leg(send, t);
+    for (const t of targets) await leg(sendBase, t);
 
     // The public leg. One request through the hostname a builder is given, asserted below to
     // have arrived at THIS Company with the Host it was sent to. It is what catches a tunnel
@@ -168,6 +197,11 @@ export function createRig(cfg = {}) {
   // second later. A zero-second lease would prove neither.
   const now = cfg.now ?? realNow;
   const canaryRules = cfg.canaryRules ?? CANARY_RULES;
+  // When this deployment fetches the agent's documents, delegation.signature must PASS like
+  // any other rule; when it does not, it must abstain for the reason named above.
+  const fetches = (cfg.companies ?? []).some(c => c.verifyDelegations);
+  const canaryAbstains = cfg.canaryAbstains ?? (fetches ? {} : CANARY_ABSTAINS);
+  const canaryAlsoPasses = fetches ? Object.keys(CANARY_ABSTAINS) : [];
   const canaryModule = cfg.canaryModule ?? "./reference/jose.ts";
   // Where the public leg is sent. Production uses each Company's configured origin; a test
   // overrides it to put a hostname in front of the wrong listener on purpose.
@@ -204,7 +238,10 @@ export function createRig(cfg = {}) {
     // previous builder cannot join the control log and fail it for us.
     if (collector) {
       const raw = record.headers?.["poppy-session"];
-      const isDoc = raw === undefined && String(record.path ?? "").startsWith("/.well-known/");
+      const isDoc = raw === undefined
+        && (String(record.path ?? "").startsWith("/.well-known/")
+            // the verifier fetching the canary's own published identity, from this process
+            || String(record.path ?? "").startsWith("/canary/"));
       if (isDoc || collector.minted.has(raw)) collector.logs[i].push(record);
       else noteArrival(i);               // a stray during the canary belongs to no run either
       return false;
@@ -371,7 +408,8 @@ export function createRig(cfg = {}) {
     const c = collector = { minted: new Set(), logs: [[], []], intended: [0, 0],
                             publicLeg: [], sendError: [], shortfall: [], legs: [] };
     try {
-      await driveCanary(graders, ports, c, { publicBase: canaryPublicBase, module: canaryModule });
+      await driveCanary(graders, ports, c, { publicBase: canaryPublicBase, module: canaryModule,
+                                            verifies: fetches, send: cfg.canaryFetch });
     } catch (err) {
       const why = String(err?.message ?? err);
       return { rule: "canary.drive", verdict: "ERROR",
@@ -380,6 +418,9 @@ export function createRig(cfg = {}) {
                  : why };
     } finally {
       collector = null;
+      // The identity exists only while the gate runs, so a builder cannot fetch it afterwards
+      // and nothing about it outlives the control.
+      for (const g of graders) g.setCanaryIdentity?.(null);
     }
     const logs = c.logs;
 
@@ -414,10 +455,23 @@ export function createRig(cfg = {}) {
       if (v.verdict !== "PASS") verdicts.set(v.id, v); else if (a?.verdict !== "PASS") verdicts.set(v.id, a);
     }
     for (const v of gradePair(logs[0], logs[1], ctxA, ctxB)) verdicts.set(v.id, v);
-    for (const id of canaryRules) {
+    for (const id of [...canaryRules, ...canaryAlsoPasses]) {
       const v = verdicts.get(id);
       if (!v || v.verdict !== "PASS")
         return { rule: id, verdict: v?.verdict ?? "MISSING", why: v?.why ?? "the canary did not reach this rule" };
+    }
+    // 2b. And a rule this deployment cannot decide must ABSTAIN for the stated reason, not
+    //     pass. A rule that is neither required to pass nor required to abstain is one that
+    //     could quietly stop reaching anything, which is this project's recorded quiet failure.
+    for (const [id, cause] of Object.entries(canaryAbstains)) {
+      const v = verdicts.get(id);
+      if (!v) return { rule: id, verdict: "MISSING", why: "the canary did not reach this rule at all" };
+      if (v.verdict === "PASS")
+        return { rule: id, verdict: "PASS",
+                 why: `this deployment does not fetch the agent's documents, so a pass here would be a statement about nothing: ${v.why}` };
+      if (v.verdict !== "INCONCLUSIVE" || v.cause !== cause)
+        return { rule: id, verdict: v.verdict,
+                 why: `expected an abstention with cause ${cause} from a deployment that does not fetch the agent's documents: ${v.why}` };
     }
 
     // 3. Last, and deliberately: did this Company REFUSE its own conforming traffic for a

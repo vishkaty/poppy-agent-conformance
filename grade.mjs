@@ -15,7 +15,8 @@
 //     "lease_seconds": 900,
 //     "reports_dir": "/var/lib/poppy-grader/reports",
 //     "companies": [
-//       { "origin": "https://poppy.example", "port": 8787, "trust_forwarded_for": true },
+//       { "origin": "https://poppy.example", "port": 8787, "trust_forwarded_for": true,
+//         "verify_delegations": false },
 //       { "origin": "https://poppy2.example", "port": 8788, "trust_forwarded_for": true }
 //     ]
 //   }
@@ -74,6 +75,11 @@ const rig = createRig({
     origin: c.origin ?? "http://127.0.0.1",
     operations: c.operations,
     trustForwardedFor: c.trust_forwarded_for === true,
+    // Verify a delegation against the key the agent published at its jwks_uri (5.2 step 1).
+    // OFF unless asked for, because it makes this process fetch a URL a stranger chose. Read
+    // the section in the README before turning it on: the fetch reveals this origin's egress
+    // address to whichever host the lease holder names in `iss`.
+    verifyDelegations: c.verify_delegations === true,
     // Where the authors' own Company validator keeps its test agent identity. Setting this
     // serves exactly agent.json and jwks.json from that directory, under /test-agent, so
     // their validator can run past discovery against this deployment. The signing key in the

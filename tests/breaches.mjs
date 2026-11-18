@@ -19,6 +19,15 @@ export const conforming = await f.conformingLog(keys);
 
 // One breach per check. Each returns a log that must fail exactly that check.
 export const BREACH = {
+  // An iss no Company could fetch, so no Company could verify the delegation.
+  "session.iss-https":          async () => [await f.request(keys, { claims: { iss: "http://agent.example/agent.json" } })],
+  // A delegation signed by a key the agent never published, which is the forgery that
+  // verifying against jwks_uri exists to catch.
+  "delegation.signature": async () => {
+    const stranger = await f.agentKeys();
+    const dlgCompact = await f.delegation(stranger);     // signed by the stranger's operator key
+    return [await f.request(keys, { dlgCompact })];      // published key set is still ours
+  },
   // A header that is present and is not a JWT. It used to pass every check.
   "session.header-jwt": async () => {
     const r = await f.request(keys, {});

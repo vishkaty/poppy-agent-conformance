@@ -15,8 +15,17 @@ import { resourceMetadataFor, authServerMetadataFor, authServerMetadataPath, dis
          openapiFor, operationsToTemplates, DEFAULT_OPERATIONS, identifierOf,
          authServerEndpointsFor } from "./discovery.mjs";
 import { enforce, tokenChallenge } from "./enforce.mjs";
+import { createIssuerKeys } from "./issuer-keys.mjs";
 
 const DEFAULT_MAX_BODY = 256 * 1024;
+
+// Resolve a hostname to every address it has, so the caller can check them all. Separated so
+// a test can inject one and so the real one is the only place node:dns is used.
+async function defaultLookup(host) {
+  const { lookup } = await import("node:dns/promises");
+  const found = await lookup(host, { all: true });
+  return found.map(a => a.address);
+}
 const DEFAULT_TEST_AGENT_PREFIX = "/test-agent";
 
 // The only two files a hosted test agent identity exposes.
@@ -26,6 +35,7 @@ const DEFAULT_TEST_AGENT_PREFIX = "/test-agent";
 // also why this is not a general static file server: it exists so the authors' own validator,
 // which is the independent control on this Company, can run past discovery.
 const TEST_AGENT_FILES = ["agent.json", "jwks.json"];
+const CANARY_PREFIX = "/canary";
 
 // Refuse a configuration that would make every verdict a statement about our deployment
 // rather than about the agent, and report destinations this grader cannot see.
@@ -114,6 +124,20 @@ export function createGrader(cfg) {
   // decline to retain one, which is how a bounded run is possible; the count of declined
   // records is kept HERE as well, because the whole point of this file is that a request
   // nothing recorded is a request no rule examines, and that must never be silent.
+  // Verifying a delegation against the key the agent published (5.2 step 1) means fetching a
+  // URL a stranger chose, from inside our network. It is OFF unless a deployment asks for it,
+  // and it can only mean anything where the agent's documents are reachable, so a loopback
+  // deployment leaves it off and the rule abstains as our own limit rather than passing for
+  // free. `issuerKeys` is injected in tests, which is how every refusal path is exercised
+  // without a network.
+  const issuerKeys = cfg.verifyDelegations
+    ? (cfg.issuerKeys ?? createIssuerKeys({ lookup: defaultLookup }))
+    : null;
+
+  // Set by the rig before it drives the canary, cleared after. Not configuration: it exists
+  // only for the seconds the gate is running.
+  let canaryIdentity = null;
+
   // Section 8 state, per Company. A conversation belongs to a client_id and a User ID and can
   // outlast the Session that started it (8.2), so it is not per run; it is bounded instead.
   const conversations = createConversations({ max: cfg.maxConversations ?? 200 });
@@ -216,11 +240,11 @@ export function createGrader(cfg) {
     res.end(JSON.stringify(body));
   }
 
-  function respond(req, res, record) {
+  async function respond(req, res, record) {
     // Just enough to be a destination. The grader's purpose is what the agent sent, not
     // what we return, so the bodies are minimal and documented as fixtures.
     const delay = config.delayMs ?? 0;
-    const send = () => {
+    const send = async () => {
       if (record.rejected) return;
       if (record.misdirected) { res.writeHead(421).end(); return; }      // RFC 9110 15.5.20
       // The three documents a conforming agent fetches before it will use the Company at
@@ -292,6 +316,28 @@ export function createGrader(cfg) {
         return;
       }
 
+      // The canary's own identity, published the way any Personal Agent publishes one.
+      //
+      // The gate drives this Company with a delegation signed by a key it generates, and once
+      // delegations are verified against the agent's jwks_uri that key has to be reachable
+      // somewhere, or the gate fails its own control and nobody is ever graded. Seeding the
+      // verifier's cache instead would be a special case the verifier knows about, which
+      // would pass a verifier whose fetch path was broken. So the canary publishes, and the
+      // verifier fetches our own hostname over the real network: that also makes this leg a
+      // second proof of egress, DNS, TLS and ingress on the path a builder's fetch takes.
+      if (canaryIdentity && record.path?.startsWith(CANARY_PREFIX + "/")) {
+        const name = record.path.slice(CANARY_PREFIX.length + 1);
+        const body = canaryIdentity[name];
+        if (body) {
+          res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+          res.end(JSON.stringify(body));
+          record.response = { status: 200, error: null };
+          return;
+        }
+        answer(res, record, 404, { error: "not_found" });
+        return;
+      }
+
       if (docs[record.path]) {
         res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
         res.end(JSON.stringify(docs[record.path]()));
@@ -311,6 +357,18 @@ export function createGrader(cfg) {
 
       // A destination. Decided HERE, after the body has fully arrived, from the same check
       // implementations the report uses, so the status and the verdict cannot disagree.
+      //
+      // The key set is attached to the record first, because the checks are pure and
+      // synchronous: every verdict has to be reproducible from a recorded log with no network,
+      // and enforcement calls grade() on one request.
+      if (issuerKeys) {
+        const jwt = decodeJwt(record.headers?.["poppy-session"]);
+        const iss = jwt?.payload?.iss;
+        if (typeof iss === "string" && iss) {
+          try { record.issuerKeys = await issuerKeys.forIssuer(iss); }
+          catch (err) { record.issuerKeys = { outcome: "grader", detail: String(err?.message ?? err), keys: [], kids: [] }; }
+        }
+      }
       //
       // Deciding earlier was possible, since every enforced rule reads headers only, but
       // answering with the body unread resets the client mid upload, leaves bodyComplete
@@ -356,12 +414,23 @@ export function createGrader(cfg) {
 
       answer(res, record, 200, { ok: true });
     };
-    if (delay > 0) setTimeout(send, delay); else send();
+    if (delay > 0) setTimeout(() => { send().catch(fail); }, delay);
+    else send().catch(fail);
+
+    function fail(err) {
+      // Never leave a request with no answer: a thrown resolver used to hang the POST.
+      if (res.headersSent) { res.end(); return; }
+      answer(res, record, 500, { error: "grader_error", detail: String(err?.message ?? err) });
+    }
   }
 
   return {
     server, records, warnings,
     get seq() { return seq; },
+    // The two documents the canary's identity is served from, under /canary/. The rig sets
+    // them for the duration of a gate run and clears them afterwards.
+    setCanaryIdentity(documents) { canaryIdentity = documents; },
+    get canaryClientId() { return `${config.origin}${CANARY_PREFIX}/agent.json`; },
     get dropped() { return dropped; },
     // The configured origin must be the one actually served, or every htu comparison is
     // wrong for our deployment and not for the agent. Used by tests on an ephemeral port

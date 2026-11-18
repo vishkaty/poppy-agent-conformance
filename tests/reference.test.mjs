@@ -39,7 +39,7 @@ test("every vendored file is the file its provenance claims", () => {
 });
 
 // One conforming request, built entirely with the authors' helpers.
-async function referenceRequest(ctx, { key, delegation, sid, sub, method = "GET", path = "/poppy/orders", token } = {}) {
+async function referenceRequest(ctx, { key, delegation, sid, sub, method = "GET", path = "/poppy/orders", token, operatorJwk } = {}) {
   const url = `https://${ctx.domain}${path}`;
   const jwt = await ref.signSessionJwt({
     key, delegation, iss: CLIENT_ID, aud: ctx.identifier,
@@ -48,6 +48,12 @@ async function referenceRequest(ctx, { key, delegation, sid, sub, method = "GET"
   return {
     host: ctx.domain, method, path, url, at: ref.nowSeconds(),
     isResource: true, isPage: false, mustNotCarry: false,
+    // The operator's public key as THEIR code produces it, attached the way server.mjs
+    // attaches a fetched key set. Their signDelegation omits `kid` whenever the root key has
+    // none, which is every key their generateKey() makes, so this is also the control for the
+    // no-kid path: a check that required a kid would fail their own code here.
+    issuerKeys: { outcome: "ok", iss: CLIENT_ID, jwksUri: "https://agent.example/jwks.json",
+                  keys: [operatorJwk], kids: [], source: "fetch", fetchedAt: ref.nowSeconds(), ageSeconds: 0 },
     sessionHeaderCount: 1, sessionHeaderDecodable: true, sessionHeaderDuplicated: false,
     headers: { "poppy-session": jwt, "poppy-version": "1.0",
                ...(token ? { authorization: `DPoP ${token}` } : {}) },
@@ -63,7 +69,8 @@ async function referenceIdentity(ctx) {
   const delegation = await ref.signDelegation({
     root: operator, delegated: key.publicJwk, iss: CLIENT_ID,
   });
-  return { key, delegation, sid: ref.randomId(16), sub: ref.randomId(16) };
+  return { key, delegation, sid: ref.randomId(16), sub: ref.randomId(16),
+           operatorJwk: operator.publicJwk };
 }
 
 test("traffic built by the authors' own signing code passes every check", async () => {

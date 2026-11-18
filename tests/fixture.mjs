@@ -20,7 +20,28 @@ export async function agentKeys() {
   const operator = await generateKeyPair("ES256", { extractable: true });
   const delegated = await generateKeyPair("ES256", { extractable: true });
   const jwk = await exportJWK(delegated.publicKey);
-  return { operator, delegated, jwk, thumb: await calculateJwkThumbprint(jwk, "sha256") };
+  // The operator's PUBLIC key, which is what the agent publishes at its jwks_uri and what a
+  // Company fetches to verify a delegation (5.2 step 1). Carried here so a conforming fixture
+  // request can model a Company that did fetch it, which is the ordinary case.
+  const operatorJwk = await exportJWK(operator.publicKey);
+  return { operator, delegated, jwk, operatorJwk,
+           thumb: await calculateJwkThumbprint(jwk, "sha256"),
+           operatorThumb: await calculateJwkThumbprint(operatorJwk, "sha256") };
+}
+
+// What server.mjs attaches to a record once it has fetched the agent's documents. Default:
+// the fetch succeeded and the operator's key is published. `over.issuerKeys` replaces it, and
+// `over.noIssuerKeys` models a Company that did not look.
+export function issuerKeysFor(keys, over = {}) {
+  if (over.noIssuerKeys) return undefined;
+  if (over.issuerKeys) return over.issuerKeys;
+  // Published under `k1`, which is the kid `delegation()` above writes into the delegation
+  // header. A real agent chooses its own kid and publishes the key under it; 5.2 says `kid`
+  // "names the key in `jwks_uri`", so these two have to agree or the fixture models an agent
+  // whose key set does not match its own delegations.
+  return { outcome: "ok", iss: CLIENT_ID, jwksUri: "https://agent.example/jwks.json",
+           keys: [{ ...keys.operatorJwk, kid: "k1" }], kids: ["k1"],
+           source: "fetch", fetchedAt: Math.floor(Date.now() / 1000), ageSeconds: 0 };
 }
 
 export async function delegation(keys, over = {}) {
@@ -65,6 +86,7 @@ export async function request(keys, over = {}) {
       ...(over.token ? { authorization: `DPoP ${over.token}` } : {}),
     },
     body: over.body ?? "",
+    issuerKeys: issuerKeysFor(keys, over),
   };
 }
 

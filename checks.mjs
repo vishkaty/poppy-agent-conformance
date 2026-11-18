@@ -400,6 +400,101 @@ export const CHECKS = [
     },
   },
   {
+    id: "session.iss-https",
+    section: "3",
+    quote: "Every URL this protocol defines or exchanges MUST be an HTTPS URL: in `poppy.json`, in authorization server and protected resource metadata, in client metadata documents (4.1), in extensions, and in assertions, Session JWTs, and responses.",
+    // Its own check rather than part of the fetch, because a verdict quotes the sentence it
+    // enforces and "find the key in the Personal Agent's jwks_uri" is the wrong sentence for a
+    // scheme defect. It also decides with no network at all, which makes it the precondition
+    // of everything the fetch does.
+    run(log) {
+      const s = sessionRequests(log);
+      if (!s.length) return SKIP("no Session header was sent");
+      const bad = [], hits = [];
+      for (const { r, jwt } of s) {
+        const iss = jwt.payload.iss;
+        let u = null;
+        try { u = new URL(String(iss)); } catch { /* not a URL at all */ }
+        if (!u) note(bad, hits, r, `${r.method} ${r.path}: iss ${JSON.stringify(iss)} is not a URL`);
+        else if (u.protocol !== "https:") note(bad, hits, r, `${r.method} ${r.path}: iss ${JSON.stringify(iss)} is ${u.protocol}//`);
+      }
+      return bad.length
+        ? FAIL("iss was not an HTTPS URL, so no Company can fetch the client metadata it names",
+               [...new Set(bad)].slice(0, 3), hits)
+        : PASS(`iss was an HTTPS URL on every one of ${s.length} request(s)`);
+    },
+  },
+  {
+    id: "delegation.signature",
+    section: "5.2",
+    quote: "Find the key in the Personal Agent's `jwks_uri` named by the delegation's `kid`, and verify the delegation's signature with it.",
+    // The forgery this closes. Everything else here verifies a Session JWT against the key its
+    // delegation NAMES, and took the delegation at its word, so a stranger could mint one
+    // claiming any client_id and this Company would attribute state to it, which 5.3 forbids
+    // in as many words: "The Company MUST NOT use unverified Session claims to attribute a
+    // request to a Personal Agent, User, or Session, or to look up their state."
+    //
+    // `kid` is matched by its member, then by RFC 7638 thumbprint, then not at all: 5.2 says
+    // `kid` "names the key" with no requirement word, and the authors' own signer omits it
+    // whenever the root key has none, which is every key its generateKey() produces. A check
+    // that failed a missing `kid` would fail their code, and reference.test.mjs would say so.
+    //
+    // The fetch itself is NOT done here. This file stays pure and synchronous, so that every
+    // verdict is reproducible from a recorded log with no network, and so that enforcement can
+    // call it on one request. server.mjs attaches the outcome as `record.issuerKeys`.
+    run(log) {
+      const s = sessionRequests(log);
+      if (!s.length) return SKIP("no Session header was sent");
+      const bad = [], hits = [];
+      let verified = 0, notHttps = 0, theirServer = null;
+      for (const { r, jwt } of s) {
+        const dlg = decodeJwt(jwt.header.poppy_dlg);
+        if (!dlg) continue;                                  // delegation.present reports it
+        const iss = String(jwt.payload.iss ?? "");
+        if (!/^https:\/\//.test(iss)) { notHttps++; continue; }
+        const fetched = r.issuerKeys;
+        // "server" is THEIR host answering in a way we cannot read as a verdict, which a
+        // builder can change, so it abstains as unreached. "grader" is us, which they cannot.
+        if (fetched?.outcome === "server") { theirServer = fetched.detail; continue; }
+        if (!fetched || fetched.outcome === "grader") continue;
+        if (fetched.outcome === "agent") {
+          note(bad, hits, r, `${r.method} ${r.path}: ${fetched.detail}`);
+          continue;
+        }
+        const wanted = dlg.header.kid;
+        const candidates = (fetched.keys ?? []).filter(k => {
+          if (!k || typeof k !== "object") return false;
+          if (wanted && k.kid === wanted) return true;
+          if (wanted && thumbprintOf(k) === wanted) return true;
+          if (wanted) return false;
+          // No kid: every key whose type could have produced this alg.
+          return dlg.header.alg === "PS384" ? k.kty === "RSA" : k.kty === "EC";
+        });
+        const ok = candidates.some(k => verifyCompact(jwt.header.poppy_dlg, k) === true);
+        if (ok) { verified++; continue; }
+        note(bad, hits, r, candidates.length
+          ? `${r.method} ${r.path}: no key at ${fetched.jwksUri} verified the delegation's signature`
+          : `${r.method} ${r.path}: kid ${JSON.stringify(wanted ?? null)} names no key at ${fetched.jwksUri}, which held ${JSON.stringify(fetched.kids ?? [])}`);
+      }
+      if (bad.length)
+        return FAIL("a delegation was not signed by a key the agent published", [...new Set(bad)].slice(0, 3), hits);
+      if (!verified) {
+        // Never a failure: this grader may have been unable to look, and that is our limit.
+        if (notHttps)
+          return SKIP(`${notHttps} request(s) named an iss that is not an HTTPS URL, so there was nothing to fetch, which session.iss-https reports`);
+        if (theirServer) return SKIP(theirServer);          // unreached: the builder can change it
+        return SKIP(firstFetchReason(s) ?? "this grader did not fetch the agent's key set", "grader");
+      }
+      // What the verdict depended on, said out loud. A PASS or a FAIL decided on a cache the
+      // builder cannot see is one they cannot argue with.
+      const src = s.map(x => x.r.issuerKeys).find(k => k?.outcome === "ok");
+      const where = src?.jwksUri ?? "the agent's jwks_uri";
+      const how = src?.source === "cache" ? `, cached ${src.ageSeconds}s ago` : "";
+      const aside = notHttps ? `; ${notHttps} other request(s) named an iss that is not HTTPS, which session.iss-https reports` : "";
+      return PASS(`every one of ${verified} delegation(s) verified against a key published at ${where}${how}${aside}`);
+    },
+  },
+  {
     id: "delegation.typ",
     section: "5.2",
     quote: "`typ` MUST be `poppy-delegation+jwt`, so a delegation can't be used as a Session JWT.",
@@ -738,6 +833,16 @@ export const CHECKS = [
 // RFC 7638 thumbprint, computed here rather than with jose so the checks stay synchronous
 // and pure. Comparing JSON.stringify(cnf.jwk) hid a shared key behind member order or an
 // extra `alg` member: measured, the same key with reordered members passed.
+// Why this grader could not look, in the words the resolver used, so an abstention is never
+// just silence.
+function firstFetchReason(s) {
+  for (const { r } of s) {
+    const k = r.issuerKeys;
+    if (k && (k.outcome === "grader" || k.outcome === "server") && k.detail) return k.detail;
+  }
+  return null;
+}
+
 export function thumbprintOf(jwk) {
   if (!jwk || typeof jwk !== "object") return null;
   const required = jwk.kty === "EC" ? ["crv", "kty", "x", "y"]

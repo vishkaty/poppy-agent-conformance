@@ -30,10 +30,17 @@ import { grade } from "./checks.mjs";
 export const ENFORCED = [
   "session.header-sent",      // 5.3: "MUST reject a request without the Session header when handling it depends on Session claims"
   "session.header-jwt",       // 5.2: "The header holds a JWT that the Personal Agent signs for that one request". Two headers joined are not a JWT either.
+  // Section 3, and the precondition of the fetch below: an iss that is not an HTTPS URL is one
+  // no Company can fetch the client metadata from, so nothing further can be decided.
+  "session.iss-https",
   "delegation.present",       // 5.2: "MUST reject, with invalid_session, a Session JWT without a delegation"
-  "delegation.typ",           // 5.2 delegated keys, the three checks, and "a Session JWT whose delegation fails any of these checks"
   "delegation.alg",
   "delegation.iss-matches",
+  // 5.2 step 1, and the forgery everything else here could not see: a delegation signed by a
+  // key the agent never published. Before delegation.typ on purpose, because a forged
+  // delegation may also carry a wrong typ and the signature is the thing worth saying.
+  "delegation.signature",
+  "delegation.typ",           // 5.2 delegated keys, the three checks, and "a Session JWT whose delegation fails any of these checks"
   "delegation.not-expired",
   "delegation.exp-24h",
   // `alg` before the signature, though 5.3 step 2 verifies the signature first. An

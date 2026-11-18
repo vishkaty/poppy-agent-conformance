@@ -16,6 +16,40 @@ const COMPANIES = () => [
   { origin: "http://127.0.0.1", apiOperations: [{ method: "GET", template: "/v1/orders" }] },
 ];
 
+
+// A transport that maps a public-looking hostname onto a loopback port while KEEPING the Host
+// header the public hostname. Built on node:http because fetch forbids setting Host, and the
+// Host is the thing the gate's public leg asserts on, so a test that dropped it would be
+// exercising less than the real path rather than more.
+async function viaHost(url, init = {}, map = {}) {
+  const { request } = await import("node:http");
+  const u = new URL(url);
+  const port = map[u.origin];
+  if (!port) {
+    const err = new Error("ENOTFOUND");
+    err.cause = { code: "ENOTFOUND" };
+    throw err;
+  }
+  return await new Promise((resolve, reject) => {
+    const req = request({ host: "127.0.0.1", port, method: init.method ?? "GET",
+                          path: u.pathname + u.search,
+                          headers: { ...(init.headers ?? {}), host: u.host } }, (res) => {
+      let body = "";
+      res.on("data", c => { body += c; });
+      res.on("end", () => resolve({
+        status: res.statusCode, redirected: false,
+        headers: new Map(Object.entries(res.headers)),
+        text: async () => body,
+        clone() { return this; },
+        json: async () => JSON.parse(body),
+      }));
+    });
+    req.on("error", reject);
+    if (init.body) req.write(init.body);
+    req.end();
+  });
+}
+
 async function rig({ origins = p => `http://127.0.0.1:${p}`, canaryPublicBase, ...over } = {}) {
   const r = createRig({ companies: COMPANIES(), ...over });
   let ports;
@@ -263,15 +297,20 @@ test("every rule is either expected to pass the canary or excluded with a reason
   // A canary whose expected set is empty passes for free, which is this project's commonest
   // recorded defect wearing a new hat. This also makes the next check added to checks.mjs
   // impossible to forget: it must be put in one list or the other deliberately.
-  const { CANARY_RULES, CANARY_EXCLUDED } = await import("../rig.mjs");
+  const { CANARY_RULES, CANARY_EXCLUDED, CANARY_ABSTAINS } = await import("../rig.mjs");
   const { CHECKS, PAIRWISE } = await import("../checks.mjs");
   const all = [...CHECKS, ...PAIRWISE].map(c => c.id);
   assert.ok(CANARY_RULES.length >= 5, `the canary expects only ${CANARY_RULES.length} rules to pass`);
   for (const id of CANARY_RULES) assert.ok(all.includes(id), `the canary expects a rule that does not exist: ${id}`);
   for (const id of Object.keys(CANARY_EXCLUDED)) assert.ok(all.includes(id), `a rule excluded from the canary does not exist: ${id}`);
   for (const id of all)
-    assert.ok(CANARY_RULES.includes(id) || CANARY_EXCLUDED[id],
-      `${id} is neither expected to pass the canary nor excluded from it with a reason`);
+    assert.ok(CANARY_RULES.includes(id) || CANARY_EXCLUDED[id] || CANARY_ABSTAINS[id],
+      `${id} is neither expected to pass the canary, nor to abstain for a stated reason, nor excluded from it`);
+  for (const [id, cause] of Object.entries(CANARY_ABSTAINS)) {
+    assert.ok(all.includes(id), `a rule expected to abstain does not exist: ${id}`);
+    assert.ok(["grader", "unreached"].includes(cause), `${id}: ${cause} is not a cause`);
+    assert.ok(!CANARY_RULES.includes(id), `${id} is expected both to pass and to abstain`);
+  }
   for (const [id, why] of Object.entries(CANARY_EXCLUDED))
     assert.ok(String(why).length > 40, `the exclusion of ${id} does not say why`);
   assert.deepEqual([...new Set(CANARY_RULES)], CANARY_RULES, "a rule is listed twice");
@@ -626,5 +665,74 @@ test("a report older than the retention window is gone, from disk too", async ()
   try {
     await fetch(`${base}/grader/health`);          // any control request sweeps
     assert.deepEqual(readdirSync(dir), [], "an expired report was left on disk");
+  } finally { await r.close(); }
+});
+
+test("with verification on, the gate verifies its own delegation against a key it published", async () => {
+  // The other branch of the canary. The gate drives this Company with a delegation signed by a
+  // key it generates, so once delegations are verified against the agent's jwks_uri that key
+  // must be reachable or the gate fails its own control for ever. It publishes it on the
+  // Company it drives and names that URL as its iss, and the verifier fetches it knowing
+  // nothing about the canary: seeding the verifier's cache would be a special case that would
+  // pass a verifier whose fetch path was broken.
+  //
+  // The network is injected here only to map the public-looking hostname onto the loopback
+  // port. Everything else, the documents, the fetch, the address checks and the signature
+  // verification, is the real path.
+  const { createIssuerKeys } = await import("../issuer-keys.mjs");
+  const map = {};
+  const send = (url, init) => viaHost(url, init, map);
+  const keys = createIssuerKeys({ fetch: send, lookup: async () => ["93.184.216.34"] });
+
+  const r = createRig({ canaryFetch: send,
+    companies: COMPANIES().map(c => ({ ...c, verifyDelegations: true, issuerKeys: keys })) });
+  try {
+    const bound = await r.listen();
+    const origins = bound.map(p => `https://company-${p}.example`);
+    // Both the public origins AND the loopback ones the canary's own legs use: the gate sends
+    // most of its traffic to 127.0.0.1 deliberately, so that it does not depend on the tunnel,
+    // and only the public leg goes out through the hostname.
+    origins.forEach((o, i) => { map[o] = bound[i]; });
+    bound.forEach((port) => { map[`http://127.0.0.1:${port}`] = port; });
+    r.setOrigins(origins);
+    r.setCanaryPublicBase(origins);
+
+    const res = await fetch(`http://127.0.0.1:${bound[0]}/grader/runs`, { method: "POST" });
+    const text = await res.text();
+    assert.equal(res.status, 201, text);
+  } finally { await r.close(); }
+});
+
+test("with verification on, a canary whose published key is wrong grades nobody", async () => {
+  // The control for the test above. Without it, a gate that never actually verified anything
+  // would pass it, which is the whole failure mode this gate exists to prevent.
+  const { createIssuerKeys } = await import("../issuer-keys.mjs");
+  const map = {};
+  const send = (url, init) => viaHost(url, init, map);
+  // Every fetch goes through the real path except the key set, which comes back belonging to
+  // somebody else. That is the forgery, seen from the gate's own side.
+  const resolver = async (url, init) => {
+    if (url.endsWith("/jwks.json"))
+      return { status: 200, redirected: false, headers: new Map(), clone() { return this; },
+               text: async () => JSON.stringify({ keys: [{ kty: "EC", crv: "P-256",
+                 x: "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+                 y: "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0", kid: "someone-else" }] }) };
+    return viaHost(url, init, map);
+  };
+  const keys = createIssuerKeys({ fetch: resolver, lookup: async () => ["93.184.216.34"] });
+
+  const r = createRig({ canaryFetch: send,
+    companies: COMPANIES().map(c => ({ ...c, verifyDelegations: true, issuerKeys: keys })) });
+  try {
+    const bound = await r.listen();
+    const origins = bound.map(p => `https://company-${p}.example`);
+    origins.forEach((o, i) => { map[o] = bound[i]; });
+    bound.forEach((port) => { map[`http://127.0.0.1:${port}`] = port; });
+    r.setOrigins(origins);
+    r.setCanaryPublicBase(origins);
+    const res = await fetch(`http://127.0.0.1:${bound[0]}/grader/runs`, { method: "POST" });
+    assert.equal(res.status, 503, "a gate that could not verify its own delegation graded anyway");
+    const body = await res.json();
+    assert.equal(body.rule, "delegation.signature", `fired on ${body.rule}: ${body.why}`);
   } finally { await r.close(); }
 });

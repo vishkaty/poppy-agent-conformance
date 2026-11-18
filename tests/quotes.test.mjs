@@ -18,6 +18,19 @@ import { dirname, join } from "node:path";
 import { CHECKS, PAIRWISE } from "../checks.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+
+// Numbers as this README writes them. Two hand-written maps used to live in the tests below
+// and each needed editing every time a count moved, which is how a test that owns a number
+// becomes the thing standing in the way of the number changing.
+const ONES = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
+              "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen",
+              "seventeen", "eighteen", "nineteen"];
+const TENS = ["", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"];
+function spell(n) {
+  if (n < 20) return ONES[n];
+  if (n < 100) return (n % 10 === 0 ? TENS[Math.floor(n / 10)] : `${TENS[Math.floor(n / 10)]} ${ONES[n % 10]}`);
+  return String(n);
+}
 const SNAP = join(HERE, "../spec");
 
 const hay = readdirSync(SNAP).filter(f => f.endsWith(".md")).sort()
@@ -89,13 +102,9 @@ test("the README states the real number of mutations", async () => {
   // away from the code, and this one is a claim about how well tested the thing is.
   const { MUTATIONS } = await import("../tools/killtest.mjs");
   const readme = readFileSync(join(HERE, "../README.md"), "utf8");
-  const words = { 31: "thirty one", 40: "forty", 43: "forty three", 44: "forty four",
-                  45: "forty five", 50: "fifty", 53: "fifty three", 54: "fifty four", 55: "fifty five", 56: "fifty six", 57: "fifty seven",
-                  50: "fifty" };
   const n = MUTATIONS.length;
-  assert.ok(readme.toLowerCase().includes(`${words[n] ?? n} mutations`)
-            || readme.includes(`${n} mutations`),
-    `the README does not say "${words[n] ?? n} mutations" for ${n}`);
+  assert.ok(readme.toLowerCase().includes(`${spell(n)} mutations`) || readme.includes(`${n} mutations`),
+    `the README does not say "${spell(n)} mutations", nor "${n} mutations"`);
 });
 
 test("the README states the real number of checks", () => {
@@ -103,12 +112,10 @@ test("the README states the real number of checks", () => {
   // standing, and the count drifted once already: it was written before the number was
   // verified. The suite owns it now.
   const readme = readFileSync(join(HERE, "../README.md"), "utf8");
-  const words = { 18: "Eighteen", 19: "Nineteen", 20: "Twenty", 21: "Twenty one",
-                  22: "Twenty two", 23: "Twenty three", 24: "Twenty four",
-                  25: "Twenty five", 26: "Twenty six" };
   const total = CHECKS.length + PAIRWISE.length;
-  assert.ok(readme.includes(`${words[total]} checks over a recorded request log`),
-    `the README does not say "${words[total]} checks over a recorded request log" for ${total} checks`);
-  assert.ok(readme.includes(`${words[CHECKS.length]} need one Company`),
-    `the README does not say "${words[CHECKS.length]} need one Company" for ${CHECKS.length}`);
+  const cap = (w) => w[0].toUpperCase() + w.slice(1);
+  assert.ok(readme.includes(`${cap(spell(total))} checks over a recorded request log`),
+    `the README does not say "${cap(spell(total))} checks over a recorded request log" for ${total}`);
+  assert.ok(readme.includes(`${cap(spell(CHECKS.length))} need one Company`),
+    `the README does not say "${cap(spell(CHECKS.length))} need one Company" for ${CHECKS.length}`);
 });

@@ -9,7 +9,7 @@ Personal Agent puts on the wire, which only the Company it is talking to can see
 
 ## What it does
 
-Twenty five checks over a recorded request log. Twenty three need one Company. Two need
+Twenty seven checks over a recorded request log. Twenty five need one Company. Two need
 two Companies, because the rules they test are pairwise: a User ID must differ per Company
 (spec 5.1) and a delegated key must sign for one User ID only (spec 5.2), so no single
 Company can observe either.
@@ -168,6 +168,43 @@ request carried no request `id` and used a `message.content` field 8.4 does not 
 Company answered its own canary 400 `invalid_request`. The gate's status guard is what noticed,
 which is precisely the case it was added for: every rule passed and the answer was still an
 error.
+
+## Verifying a delegation, and what it costs to
+
+Everything else here verifies a Session JWT against the key its delegation NAMES, and takes the
+delegation itself at its word. So a stranger can mint one claiming any `client_id`, and this
+Company would attribute conversation state to it, which 5.3 forbids in as many words: "The
+Company MUST NOT use unverified Session claims to attribute a request to a Personal Agent,
+User, or Session, or to look up their state." That is a stronger reason to close this than the
+two warnings the authors validator raises about it.
+
+The rule is 5.2 step 1, quoted: "Find the key in the Personal Agent's `jwks_uri` named by the
+delegation's `kid`, and verify the delegation's signature with it." Doing it means fetching a
+URL a stranger chose, from inside our network, so it is **off unless a deployment asks for it**
+with `verify_delegations`, and the rule abstains as our own limit rather than passing for free
+when it is off. The gate asserts that abstention rather than ignoring it: a pass with no key set
+would be a statement about nothing.
+
+`addresses.mjs` is the boundary. It is an allowlist, so a range nobody thought of fails closed,
+and it decodes the IPv4 forms hidden inside IPv6 before classifying anything, because
+`::ffff:127.0.0.1` is the bypass a denylist misses. Section 3: "Personal Agents and Companies
+MUST NOT connect to a loopback, private, or link-local address for a URL the other party gave
+them." Beyond that, and ours rather than the specification's: only port 443, no credentials in
+the URL, no redirects, 100 KB, and the connection is pinned to the address that was checked, so
+DNS cannot answer differently the second time.
+
+Whose fault an outcome is comes down to bytes. If a response arrived, it is about the agent,
+because a status code is its own server speaking, and only 404 and 410 are failures: a 401, 403
+or 429 is something a builder can change, and a bot rule in front of a metadata host must never
+close a door. If no response arrived, it is ours, and the rule abstains with cause grader and
+never fails the builder. A failed fetch is not retried on every request, and a lease has a
+budget of distinct issuers, because whoever holds it can name a new one on every request.
+
+**What turning it on costs.** This process stops being one that only ever answered. Whoever
+holds a lease can make it connect to any public host on 443, and that host learns this origin's
+egress address, which a tunnel otherwise conceals. The address checks stop it reaching anything
+internal; they do nothing about that. Decide whether to route these fetches through an egress
+you are willing to expose before the first public run with it enabled.
 
 ## A run
 
@@ -471,7 +508,7 @@ than a citation.
 
 Early, and honest about what has been measured.
 
-Twenty five rules, and fifty six mutations that each break one guard and require a named test
+Twenty seven rules, and seventy nine mutations that each break one guard and require a named test
 to notice. The test count is deliberately not quoted here: it went stale twice in one day, and
 `npm test` prints it. It has been run against synthetic traffic, against traffic minted by the
 authors own signing code, and end to end through a tunnel at a real hostname on 443, where a
