@@ -3,7 +3,6 @@
   "source": "kit/company/validate/jose.ts in the Personal Agent Protocol implementation kit",
   "retrieved_from": "https://personalagentprotocol.org/kit/implement-personal-agent-protocol.zip",
   "retrieved": "2026-11-17",
-  "kit_zip_sha256": "b9941ebea0646a2e774362b6332253a9f7cbbe2fd9d8914b188e09f8d4e418e3",
   "protocol_version_the_kit_validates": "1.0",
   "why_vendored": "So the verification is hermetic and anyone can reproduce it. A test that silently skips when the kit is absent would be the vacuous pass this project exists to avoid.",
   "files": {
@@ -22,5 +21,7 @@
       "used_as": "the schema their validator applies to a poppy.json",
       "sha256": "3b4ade4931b77ca6a511c28f98eb03762122f1878b62982b6b0e1bb595d86142"
     }
-  }
+  },
+  "kit_zip_sha256_note": "The zip hash is the archive one download produced, and it is NOT a content identifier: three downloads an hour apart gave three different zip hashes over byte-identical content, proven by digesting all 96 files of two of them. It differs between downloads because of packaging. The per-file sha256 values below are the content identity, and the report cites a digest over them.",
+  "kit_zip_sha256_downloaded_once": "b9941ebea0646a2e774362b6332253a9f7cbbe2fd9d8914b188e09f8d4e418e3"
 }

@@ -277,3 +277,43 @@ test("a version change names the requests where it changed, not the whole Sessio
   assert.deepEqual(v.decidedBy, [log[0], log[3], log[5]],
     "the failure did not point at the first request carrying each different value");
 });
+
+test("the report identifies the oracle by its content, not by the archive it arrived in", async () => {
+  // Measured: three downloads of the kit an hour apart produced three different zip sha256
+  // values over byte-identical content, proven by digesting all 96 files of two of them. So
+  // the zip hash is packaging, and a report citing it as the oracle's provenance would make
+  // two runs of identical code appear to cite different oracles. The identity has to be a
+  // digest of the files we actually use, computed from the files on disk so it is verified
+  // rather than asserted.
+  const { createHash } = await import("node:crypto");
+  const { readFileSync, readdirSync } = await import("node:fs");
+  const rep = buildReport({ token: "t", started: 1, ended: 2, frozen: true, warnings: [],
+                            graderCommit: "x",
+                            companies: [{ ctx: CTX_A, log: [] }, { ctx: CTX_B, log: [] }] });
+
+  assert.ok(rep.grader.oracle, "the report does not identify the oracle at all");
+  assert.match(rep.grader.oracle.digest, /^[0-9a-f]{16,64}$/);
+  assert.ok(rep.grader.oracle.files >= 3, `only ${rep.grader.oracle.files} oracle files named`);
+
+  // recompute it from the files themselves
+  const dir = join(HERE, "../reference");
+  const prov = JSON.parse(readFileSync(join(dir, "PROVENANCE.json"), "utf8"));
+  const lines = Object.keys(prov.files).sort()
+    .map(n => `${n}:${createHash("sha256").update(readFileSync(join(dir, n))).digest("hex")}`);
+  const want = createHash("sha256").update(lines.join("\n")).digest("hex");
+  assert.equal(rep.grader.oracle.digest, want.slice(0, rep.grader.oracle.digest.length),
+    "the oracle digest in the report is not a digest of the vendored files on disk");
+
+  // and the unstable value must not be presented as the oracle's identity
+  const text = JSON.stringify(rep) + renderHtml(rep);
+  assert.ok(!text.includes(prov.kit_zip_sha256),
+    "the report still cites the kit zip hash, which is not stable across downloads");
+});
+
+test("the vendored provenance says plainly that the zip hash is not a content identifier", () => {
+  // Otherwise the next person to compare two kit downloads concludes the oracle changed.
+  const prov = JSON.parse(readFileSync(join(HERE, "../reference/PROVENANCE.json"), "utf8"));
+  const note = JSON.stringify(prov).toLowerCase();
+  assert.match(note, /not a content identifier|packaging|differs between downloads/,
+    "nothing in the provenance warns that the zip hash changes without the content changing");
+});

@@ -16,6 +16,22 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const PROV = JSON.parse(readFileSync(join(HERE, "spec/PROVENANCE.json"), "utf8"));
 const REF_PROV = JSON.parse(readFileSync(join(HERE, "reference/PROVENANCE.json"), "utf8"));
 
+// Which oracle judged this run, by its CONTENT.
+//
+// The obvious identifier, the sha256 of the kit archive we vendored from, is not one: three
+// downloads an hour apart gave three different zip hashes over byte-identical content, proven
+// by digesting all 96 files of two of them. A report citing that would make two runs of
+// identical code appear to cite different oracles. So this digests the vendored files
+// themselves, read from disk at report time, which also means an edited oracle changes the
+// identity in every report rather than passing unnoticed.
+function oracleIdentity() {
+  const names = Object.keys(REF_PROV.files ?? {}).sort();
+  const lines = names.map(n =>
+    `${n}:${createHash("sha256").update(readFileSync(join(HERE, "reference", n))).digest("hex")}`);
+  return { files: names.length, digest: createHash("sha256").update(lines.join("\n")).digest("hex").slice(0, 16),
+           protocolVersion: REF_PROV.protocol_version_the_kit_validates ?? null };
+}
+
 // Section anchors, read from the capture rather than guessed, so a renamed anchor fails the
 // suite instead of linking a builder to nothing.
 const ANCHORS = (() => {
@@ -211,7 +227,7 @@ export function buildReport(run) {
   return {
     spec: { version: PROV.version, published: PROV.published, commit: PROV.commit,
             specSha256: PROV.pages?.spec?.sha256 ?? null, verified: PROV.verified_against_authors_hashes },
-    grader: { commit: run.graderCommit ?? "unknown", kitZipSha256: REF_PROV.kit_zip_sha256 ?? null,
+    grader: { commit: run.graderCommit ?? "unknown", oracle: oracleIdentity(),
               clock: iso(Math.floor(Date.now() / 1000)) },
     run: { started: run.started ?? null, ended: run.ended ?? null, frozen: !!run.frozen,
            companies: [A.ctx.identifier, B.ctx.identifier], issuers },

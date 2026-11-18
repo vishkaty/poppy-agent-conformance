@@ -278,8 +278,16 @@ the fixture geometry and not the rule.
 
 ## Judged by their code, not only by our reading
 
-`reference/` holds three files from the authors published kit, each with the sha256 of the
-archive it came from and of the file itself, which the suite verifies before using them.
+`reference/` holds three files from the authors published kit, each with its own sha256, which
+the suite verifies before using them.
+
+Not the archive's sha256, which is worth saying because it is the obvious choice and it is
+wrong. Three downloads of the kit an hour apart gave three different zip hashes over
+byte identical content, proven by digesting all 96 files of two of them: the hash changes with
+packaging. A report that cited it would make two runs of identical code appear to cite
+different oracles. So every report carries a digest of the vendored files themselves, read from
+disk when the report is built, which also means an edited oracle changes that digest instead of
+passing unnoticed.
 
 `jose.ts` is their signing code. The suite mints conforming traffic with it and requires
 every check to pass, so if our grader failed traffic built by the people who wrote the
