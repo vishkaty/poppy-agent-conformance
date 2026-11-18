@@ -86,6 +86,56 @@ Every failure names the rule, quotes the sentence of 1.0 it enforces, links the 
 names the request that decided it. A test requires that of every check, because a failure a
 builder cannot trace to a request is one they have to ask us about.
 
+## What it refuses, and what it only reports
+
+This Company used to answer 200 to everything and put its verdicts in the report. That makes
+a grader a poor rehearsal: an agent that is told 200 for a forged Session JWT never runs the
+recovery code section 7 puts requirements on, and it would then fail against a real Company.
+So requests that break a rule a Company can decide on are refused with the error 1.0 names.
+
+ONE implementation decides both. The refusal calls the same `grade` the report calls, on a log
+of exactly the request in front of it, and reads the same verdict and the same sentence. There
+is no second rule engine to drift, which is the fix already applied to the OpenAPI document and
+to the discovery document.
+
+A wrong FAIL in a report is this instrument's most expensive output. A wrong REFUSAL is worse,
+because the agent cannot proceed at all and will conclude the Company is broken. Four things
+bound it:
+
+- **Only monotone rules are enforced.** A rule is enforced only if it fails a request on its
+  own AND fails the same request inside a log of conforming traffic. `tests/monotone.test.mjs`
+  asserts that over every enforced rule. The property is what split the version rule in two:
+  a request carrying the Session header and no `Poppy-Version` used to fail when it was alone
+  and pass when another Session in the same run had sent the header.
+- **Only destinations are refused.** 5.3: "An endpoint that uses no Session claims MAY handle a
+  request without verifying the header or requiring one", and 5.2 says documents and OAuth
+  endpoints do not carry the header at all. A document, a website page or anything that is not
+  a Session destination is answered as before.
+- **Nothing conforming is refused, asserted three ways.** Every request of the conforming
+  fixture, every request minted by the authors own signing code, and every case in
+  `false-fails.test.mjs`, which is the traffic this project once wrongly failed.
+- **The deployment proves it before grading anyone.** The canary already drives this Company
+  with the authors own code before a lease is granted; it now also refuses to grade if any of
+  that traffic came back with an error, which is the sharpest failure enforcement introduces.
+
+The errors are the ones 1.0 names, and two details are worth stating because guessing gets
+them wrong. A failed Session check is **400**, not 401, and 5.3 says why: "Session errors use
+400 rather than 401 so that OAuth libraries, which treat a 401 as a problem with the access
+token, don't discard a valid token." And a missing or incompatible `Poppy-Version` is its own
+code, `version_unsupported`, not `invalid_session`, because section 7 gives them different
+recoveries: `invalid_session` means "the Personal Agent stops sending the request until it
+fixes the cause" while `version_unsupported` means refetch `poppy.json` and start a new
+Session. Telling an agent the wrong one sends it into a loop.
+
+`session_ended` is never sent, and a test asserts it. Section 7 gives it the OPPOSITE
+instruction to `invalid_session`, and this Company ends no Session and holds no account, so no
+failure here can be one.
+
+Nine rules are reported and never refused, each with its reason in `enforce.mjs`: the three
+that need more than one request to decide, the one about documents, and the two privacy rules,
+which are the most contestable accusations this grader makes and so are never used to close a
+door.
+
 ## A run
 
 `rig.mjs` is how a builder actually uses this. It stands up two Companies, because several
@@ -374,7 +424,7 @@ than a citation.
 
 Early, and honest about what has been measured.
 
-Twenty five rules, and twenty two mutations that each break one guard and require a named test
+Twenty five rules, and thirty one mutations that each break one guard and require a named test
 to notice. The test count is deliberately not quoted here: it went stale twice in one day, and
 `npm test` prints it. It has been run against synthetic traffic, against traffic minted by the
 authors own signing code, and end to end through a tunnel at a real hostname on 443, where a

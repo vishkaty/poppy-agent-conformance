@@ -57,7 +57,7 @@ export const REACH = Object.fromEntries([
 REACH["session.ath"] = { reachable: false,
   how: "This grader issues no access tokens, so a conforming agent has nothing to send here and this outcome is expected. The rule is judged only if you point a signed-in code path at it with a token of your own; the grader compares ath with the SHA-256 of whatever Authorization value it receives." };
 REACH["session.not-on-documents"] = { how: "Let your agent do discovery against this grader: fetch /.well-known/poppy.json and the OAuth metadata. The rule reads whether a Session JWT went to any of them, which it must not." };
-REACH["session.header-single"] = { how: "Send a request to a listed destination. The rule reads whether exactly one Poppy-Session header arrived, so it is judged by any such request." };
+REACH["session.header-jwt"] = { how: "Send a request to a listed destination with a Poppy-Session header. The rule reads whether exactly one header arrived and whether its value is a JWT, so any such request judges it." };
 REACH["delegation.alg"] = { how: "Send a request whose Session JWT carries a delegation. The rule reads the delegation's own alg, which 1.0 limits to ES256 and PS384." };
 
 const PRIVATE_JWK = ["d", "p", "q", "dp", "dq", "qi", "k"];

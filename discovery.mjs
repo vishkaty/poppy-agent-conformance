@@ -50,6 +50,26 @@ export function discoveryFor(origin, { name = "Grader Shop", withExtensions = fa
   };
 }
 
+// What a Session JWT must name in `aud`, and what User IDs are scoped by.
+//
+// 3.2: "The Company's identifier is its issuer when it has one, and otherwise
+// `https://{organization.domain}`, with the host in lowercase and no trailing slash." 5.2
+// repeats it for `aud`. The second half is not theoretical: 3.2 allows a Company with no
+// issuer at all, "A Company without one can offer signed-out Sessions, including APIs,
+// conversations, feedback, and browser join, without running an authorization server", which
+// is exactly the kind of Company this grader is. Reading only `auth.issuer` meant such a
+// Company compared every `aud` against undefined and failed every conforming agent.
+//
+// One implementation, used by the recorder, the rig and the report, so the identifier a
+// verdict is judged against is the identifier the Company publishes.
+export function identifierOf(discovery) {
+  const issuer = discovery?.auth?.issuer;
+  if (typeof issuer === "string" && issuer) return issuer;
+  const domain = discovery?.organization?.domain;
+  if (typeof domain === "string" && domain) return `https://${domain.toLowerCase()}`.replace(/\/+$/, "");
+  return null;
+}
+
 // The OpenAPI document the discovery advertises, built from the Company's declared operations.
 //
 // 5.2 counts "the request URLs its listed APIs describe", so the document an agent reads and

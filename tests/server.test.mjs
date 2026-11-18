@@ -7,6 +7,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { connect } from "node:net";
 import { createGrader, validateConfig } from "../server.mjs";
+import { discoveryFor, identifierOf } from "../discovery.mjs";
 
 const DISCOVERY = {
   protocol_version: "1.0",
@@ -16,6 +17,20 @@ const DISCOVERY = {
   tasks: { endpoint: "http://127.0.0.1/poppy/tasks" },
 };
 const base = port => `http://127.0.0.1:${port}`;
+
+// A Company with its own DERIVED document, for the enforcement tests. The pinned DISCOVERY
+// above is a recorder fixture: it declares no issuer and names no port, which is deliberate
+// there and wrong for anything that compares aud or htu.
+async function withCompany(fn, over = {}) {
+  const g = createGrader({ origin: "http://127.0.0.1", discovery: discoveryFor,
+                           operations: [{ method: "GET", path: "/poppy/orders" }], ...over });
+  const port = await g.listen(0);
+  g.setOrigin(base(port));
+  const d = g.config.discovery;
+  const ctx = { identifier: identifierOf(d), domain: d.organization.domain,
+                protocolVersion: d.protocol_version };
+  try { return await fn(g, port, ctx); } finally { await g.close(); }
+}
 
 async function withGrader(fn, over = {}) {
   const g = createGrader({ origin: "http://127.0.0.1", discovery: DISCOVERY,
@@ -305,4 +320,82 @@ test("a hosted identity prefix may not collide with the control plane or a desti
   assert.throws(() => validateConfig({ origin: "http://127.0.0.1:8", discovery: DISCOVERY,
     controlPrefix: "/grader/", testAgentIdentity: "/tmp", testAgentPrefix: "/grader/id" }),
     /control-plane prefix/);
+});
+
+test("the status this Company answers and the verdict it records can never disagree", async () => {
+  // The invariant the whole design rests on. One implementation decides both, so for every
+  // destination request the error in the response must be exactly the error the recorded
+  // verdict implies, and a request with no enforced failure must get the ordinary answer.
+  const { enforce } = await import("../enforce.mjs");
+  await withCompany(async (g, port, ctx) => {
+    const ref = await import("../reference/jose.ts");
+    const operator = await ref.generateKey(), key = await ref.generateKey();
+    const good = await ref.signDelegation({ root: operator, delegated: key.publicJwk,
+                                            iss: "https://agent.example/agent.json" });
+    const sid = ref.randomId(16), sub = ref.randomId(16);
+    const sign = async (over = {}) => ref.signSessionJwt({
+      key, delegation: over.delegation ?? good, iss: over.iss ?? "https://agent.example/agent.json",
+      aud: over.aud ?? ctx.identifier, sid, sub, method: "GET",
+      url: over.url ?? `${g.config.origin}/poppy/orders` });
+
+    const cases = [
+      ["conforming", { "poppy-session": await sign(), "poppy-version": "1.0" }, 200, null],
+      ["no header", { }, 400, "invalid_session"],
+      ["no version", { "poppy-session": await sign() }, 400, "version_unsupported"],
+      ["wrong aud", { "poppy-session": await sign({ aud: "https://elsewhere.example/poppy" }), "poppy-version": "1.0" }, 400, "invalid_session"],
+      ["wrong htu", { "poppy-session": await sign({ url: "https://elsewhere.example/poppy/orders" }), "poppy-version": "1.0" }, 400, "invalid_session"],
+      ["incompatible version", { "poppy-session": await sign(), "poppy-version": "2.0" }, 400, "version_unsupported"],
+    ];
+
+    for (const [what, headers, status, error] of cases) {
+      const res = await fetch(`${base(port)}/poppy/orders`, { headers });
+      const body = await res.json().catch(() => ({}));
+      assert.equal(res.status, status, `${what}: answered ${res.status} ${JSON.stringify(body)}`);
+      assert.equal(body.error ?? null, error, `${what}: body said ${JSON.stringify(body)}`);
+
+      const r = g.records.at(-1);
+      const decided = enforce(r, ctx);
+      assert.equal(decided?.body?.error ?? null, error,
+        `${what}: the recorded request implies ${decided?.body?.error ?? "no error"} and the Company answered ${error}`);
+      assert.equal(r.response?.status, status, `${what}: the record does not say what was answered`);
+      assert.equal(r.response?.error ?? null, error, `${what}: the record's response error disagrees`);
+    }
+  });
+});
+
+test("a rejected request is still recorded, in full, so the report can judge it", async () => {
+  // Rejecting must not blind the instrument. The record carries the headers and the verdict
+  // exactly as an accepted request does; the only difference is what we answered.
+  await withCompany(async (g, port) => {
+    await fetch(`${base(port)}/poppy/orders`, { headers: { "poppy-session": "not-a-jwt", "poppy-version": "1.0" } });
+    const r = g.records.at(-1);
+    assert.equal(r.isResource, true);
+    assert.equal(r.headers["poppy-session"], "not-a-jwt");
+    assert.equal(r.response.status, 400);
+    assert.ok(r.rejection, "the record does not say it was rejected");
+    assert.match(r.rejection.rule, /^session\.|^delegation\.|^version\./);
+  });
+});
+
+test("an access token this Company never issued gets the OAuth challenge, after the Session passes", async () => {
+  await withCompany(async (g, port, ctx) => {
+    const ref = await import("../reference/jose.ts");
+    const d = g.config.discovery;
+    const operator = await ref.generateKey(), key = await ref.generateKey();
+    const delegation = await ref.signDelegation({ root: operator, delegated: key.publicJwk,
+                                                  iss: "https://agent.example/agent.json" });
+    const token = "tok-" + ref.randomId(16);
+    const jwt = await ref.signSessionJwt({ key, delegation, iss: "https://agent.example/agent.json",
+      aud: ctx.identifier, sid: ref.randomId(16), sub: ref.randomId(16),
+      method: "GET", url: `${g.config.origin}/poppy/orders`, accessToken: token });
+    const res = await fetch(`${base(port)}/poppy/orders`,
+      { headers: { "poppy-session": jwt, "poppy-version": "1.0", authorization: `DPoP ${token}` } });
+    assert.equal(res.status, 401, await res.text());
+    assert.match(res.headers.get("www-authenticate") ?? "", /error="invalid_token"/);
+    assert.match(res.headers.get("www-authenticate") ?? "", /resource_metadata=/);
+    // and the ath rule was still judged, from the record, which is what keeps it reachable
+    const { grade } = await import("../checks.mjs");
+    const v = grade([g.records.at(-1)], ctx).find(x => x.id === "session.ath");
+    assert.equal(v.verdict, "PASS", `session.ath became unjudgeable: ${v.verdict} ${v.why}`);
+  });
 });

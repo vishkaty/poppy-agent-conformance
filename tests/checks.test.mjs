@@ -125,3 +125,27 @@ test("every historical rule abstains when no Session had two requests to compare
     assert.equal(v.verdict, "INCONCLUSIVE", `${id} claimed something on one request: ${v.why}`);
   }
 });
+
+test("two Poppy-Session headers break the same rule as a header that is not a JWT", async () => {
+  // One sentence of 5.2, both ways of breaking it, which is why they are one check. The
+  // evidence must still say which, or a builder cannot tell a duplicated header from a
+  // malformed one.
+  const a = await f.request(keys, {});
+  const b = await f.request(keys, {});
+  const dup = await f.request(keys, {});
+  dup.headers["poppy-session"] = `${a.headers["poppy-session"]}, ${b.headers["poppy-session"]}`;
+  dup.sessionHeaderCount = 2;
+  dup.sessionHeaderDecodable = false;
+  dup.sessionHeaderDuplicated = true;
+
+  const v = grade([dup], f.ctx).find(x => x.id === "session.header-jwt");
+  assert.equal(v.verdict, "FAIL", `${v.verdict}: ${v.why}`);
+  assert.match(v.evidence.join(" "), /2 Poppy-Session headers/, v.evidence.join(" "));
+
+  const junk = await f.request(keys, {});
+  junk.headers["poppy-session"] = "not-a-jwt";
+  junk.sessionHeaderDecodable = false;
+  const w = grade([junk], f.ctx).find(x => x.id === "session.header-jwt");
+  assert.equal(w.verdict, "FAIL", `${w.verdict}: ${w.why}`);
+  assert.match(w.evidence.join(" "), /not a JWT/, w.evidence.join(" "));
+});

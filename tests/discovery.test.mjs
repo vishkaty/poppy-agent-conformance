@@ -193,3 +193,54 @@ test("every URL this Company publishes on its own origin is served", async () =>
     assert.deepEqual(dead, [], "this Company advertises URLs it does not serve");
   } finally { await g.close(); }
 });
+
+test("a Company with no issuer still has an identifier, and it is the one 3.2 names", async () => {
+  // 3.2: "The Company's identifier is its issuer when it has one, and otherwise
+  // `https://{organization.domain}`, with the host in lowercase and no trailing slash."
+  // 3.2 also allows having no issuer at all: "A Company without one can offer signed-out
+  // Sessions, including APIs, conversations, feedback, and browser join, without running an
+  // authorization server." Reading only `auth.issuer` meant such a Company compared every
+  // `aud` against undefined, which fails every conforming agent for our reason.
+  const { identifierOf } = await import("../discovery.mjs");
+  assert.equal(identifierOf({ organization: { domain: "shop.example" },
+                              auth: { issuer: "https://shop.example/poppy" } }),
+               "https://shop.example/poppy", "an issuer must win when there is one");
+  assert.equal(identifierOf({ organization: { domain: "Shop.Example" } }),
+               "https://shop.example", "no issuer: the https domain, lowercased");
+  assert.equal(identifierOf({ organization: { domain: "shop.example:8443" } }),
+               "https://shop.example:8443", "a port belongs to the domain (3.1)");
+  assert.equal(identifierOf({ organization: { domain: "shop.example" }, auth: {} }),
+               "https://shop.example");
+  assert.equal(identifierOf({}), null, "nothing to go on must be null, not a broken string");
+});
+
+test("a conforming agent at a Company with no issuer is not failed on aud", async () => {
+  // The consequence, end to end through the recorder and the checks.
+  const { grade } = await import("../checks.mjs");
+  const ref = await import("../reference/jose.ts");
+  const { identifierOf } = await import("../discovery.mjs");
+  const noIssuer = (origin) => {
+    const d = discoveryFor(origin);
+    const { auth, ...rest } = d;
+    return rest;
+  };
+  const g = createGrader({ origin: "http://127.0.0.1", discovery: noIssuer, operations: OPERATIONS });
+  const port = await g.listen(0);
+  g.setOrigin(`http://127.0.0.1:${port}`);
+  try {
+    const d = g.config.discovery;
+    assert.equal(d.auth, undefined, "the fixture still declares an issuer");
+    const id = identifierOf(d);
+    const operator = await ref.generateKey(), key = await ref.generateKey();
+    const delegation = await ref.signDelegation({ root: operator, delegated: key.publicJwk,
+                                                  iss: "https://agent.example/agent.json" });
+    const jwt = await ref.signSessionJwt({ key, delegation, iss: "https://agent.example/agent.json",
+      aud: id, sid: ref.randomId(16), sub: ref.randomId(16),
+      method: "GET", url: `${g.config.origin}/poppy/orders` });
+    await fetch(`${g.config.origin}/poppy/orders`,
+                { headers: { "poppy-session": jwt, "poppy-version": "1.0" } });
+    const v = grade([g.records.at(-1)], { identifier: id, domain: d.organization.domain })
+      .find(x => x.id === "session.aud");
+    assert.equal(v.verdict, "PASS", `${v.verdict}: ${v.why}`);
+  } finally { await g.close(); }
+});

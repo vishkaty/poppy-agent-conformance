@@ -19,6 +19,13 @@ export const conforming = await f.conformingLog(keys);
 
 // One breach per check. Each returns a log that must fail exactly that check.
 export const BREACH = {
+  // A header that is present and is not a JWT. It used to pass every check.
+  "session.header-jwt": async () => {
+    const r = await f.request(keys, {});
+    r.headers["poppy-session"] = "not-a-jwt";
+    r.sessionHeaderDecodable = false;
+    return [r];
+  },
   // A request carrying the Session header and no Poppy-Version, which 3.4 makes a per-request
   // failure with its own error. The historical rule below is a different breach: two values
   // inside one Session.
@@ -107,14 +114,6 @@ export const BREACH = {
     r.isResource = false; r.mustNotCarry = true;
     r.classifiedAs = "a discovery or description document, or an OAuth endpoint (5.2)";
     r.sessionHeaderCount = 1;
-    return [r];
-  },
-  "session.header-single": async () => {
-    // What the recorder produces for two Poppy-Session headers: the value removed, because
-    // a joined pair is not a JWT, and the duplication flagged so the right rule fails.
-    const r = await f.request(keys, {});
-    delete r.headers["poppy-session"];
-    r.sessionHeaderDuplicated = true;
     return [r];
   },
 };

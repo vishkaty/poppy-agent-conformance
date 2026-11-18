@@ -16,27 +16,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { CHECKS, grade } from "../checks.mjs";
+import { ENFORCED, ENFORCE_EXCLUDED } from "../enforce.mjs";
 import { BREACH, conforming, keys } from "./breaches.mjs";
 import * as f from "./fixture.mjs";
 
-// The rules a Company can decide on one request, each with a named error in 1.0. Everything
-// else is judged only, and says why. A test below requires the two lists to cover CHECKS, so
-// a new rule has to be put in one of them on purpose.
-export const PER_REQUEST = [
-  "session.header-sent", "session.header-single", "session.typ", "session.alg", "session.aud",
-  "session.htm-htu", "session.iat-window", "session.claims-present", "session.ath",
-  "delegation.present", "delegation.typ", "delegation.alg", "delegation.iss-matches",
-  "delegation.not-expired", "delegation.exp-24h", "session.signature", "version.sent",
-];
-export const NEEDS_HISTORY = {
-  "session.jti-unique": "Reuse needs two requests to observe, and 5.3 only says a Company MAY reject a reused jti.",
-  "session.sub-stable": "Change within a Session needs two requests in it, and 1.0 names no Company error for it.",
-  "version.constant": "Sameness across a Session needs two requests in it. The per-request half is version.sent.",
-  "session.not-on-documents": "About documents, which this Company serves rather than refuses; 5.2 says they do not carry the header.",
-  "delegation.no-identifiers": "A privacy rule on the agent, not among the delegation checks 5.2 tells a Company to reject on.",
-  "delegation.no-private-key": "The same, and a key carrying `d` still verifies, so the breach is reported rather than refused.",
-};
-
+// The lists live in enforce.mjs, with the product code that acts on them, so there is one
+// place where a rule is declared decidable on a single request. A second copy here would be
+// the duplication this file exists to prevent.
+export const PER_REQUEST = ENFORCED;
+export const NEEDS_HISTORY = ENFORCE_EXCLUDED;
 test("every check is either decidable on one request or says why it is not", () => {
   const ids = CHECKS.map(c => c.id);
   for (const id of PER_REQUEST) assert.ok(ids.includes(id), `PER_REQUEST names a check that does not exist: ${id}`);

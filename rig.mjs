@@ -28,9 +28,9 @@ const MAX_PER_COMPANY = 2000;
 // Every id in CHECKS and PAIRWISE must appear here or in CANARY_EXCLUDED, and a test
 // enforces that, so a new check cannot be forgotten by either.
 export const CANARY_RULES = [
-  "session.header-sent", "session.typ", "session.alg", "session.aud", "session.htm-htu",
+  "session.header-sent", "session.header-jwt", "session.typ", "session.alg", "session.aud", "session.htm-htu",
   "session.iat-window", "session.claims-present", "session.sub-stable", "session.jti-unique",
-  "session.signature", "session.header-single", "session.not-on-documents",
+  "session.signature", "session.not-on-documents",
   "delegation.present", "delegation.typ", "delegation.alg", "delegation.exp-24h",
   "delegation.not-expired", "delegation.iss-matches", "delegation.no-identifiers",
   "delegation.no-private-key", "version.constant", "version.sent",
@@ -59,6 +59,18 @@ const publicOriginOf = d => { try { return new URL(d.auth.issuer).origin; } catc
 // below carries information only when the configured origin is a real hostname. An IP literal
 // in 127.0.0.0/8 or ::1 is the case where it does not.
 const isLoopbackLiteral = host => /^(\[::1\]|::1|127(\.\d{1,3}){3})$/.test(String(host));
+
+// The first leg of the canary this deployment refused.
+//
+// The rule verdicts are one guard on a misconfigured deployment. This is a second and a
+// blunter one: whatever the rules say, a non 2xx answer to traffic the protocol authors' own
+// code built means this Company would stop a conforming agent at its first request. It also
+// catches answers no rule covers, such as a 405 from a method mismatch, a 404 from a
+// destination we do not actually serve, or a 500 from our own code.
+export function firstRefusedLeg(legs) {
+  for (const leg of legs ?? []) if (!(leg.status >= 200 && leg.status < 300)) return leg;
+  return null;
+}
 
 // A conforming agent, driven by the protocol authors' own signing code.
 //
@@ -107,11 +119,15 @@ async function driveCanary(graders, ports, collector, { publicBase, module: mod 
         aud: ctx.identifier, sid, sub, method: t.method, url: `${pub}${t.path}` });
       collector.minted.add(jwt);
       try {
-        await fetch(`${base}${t.path}`, {
+        const res = await fetch(`${base}${t.path}`, {
           method: t.method, body: t.body,
           headers: { "poppy-session": jwt, "poppy-version": d.protocol_version,
                      ...(t.body ? { "content-type": "application/json" } : {}) },
         });
+        let error = null;
+        try { error = (await res.clone().json())?.error ?? null; } catch { /* not JSON */ }
+        collector.legs.push({ status: res.status, path: t.path, method: t.method,
+                              origin: graders[i].config.origin, error });
       } catch (err) { collector.sendError[i] = String(err?.cause?.code ?? err?.message ?? err); }
       return jwt;
     };
@@ -303,7 +319,7 @@ export function createRig(cfg = {}) {
   // Returns null when the control passed, or the first rule that did not.
   async function runCanary() {
     const c = collector = { minted: new Set(), logs: [[], []], intended: [0, 0],
-                            publicLeg: [], sendError: [], shortfall: [] };
+                            publicLeg: [], sendError: [], shortfall: [], legs: [] };
     try {
       await driveCanary(graders, ports, c, { publicBase: canaryPublicBase, module: canaryModule });
     } catch (err) {
@@ -353,6 +369,19 @@ export function createRig(cfg = {}) {
       if (!v || v.verdict !== "PASS")
         return { rule: id, verdict: v?.verdict ?? "MISSING", why: v?.why ?? "the canary did not reach this rule" };
     }
+
+    // 3. Last, and deliberately: did this Company REFUSE its own conforming traffic for a
+    //    reason no rule above covers? A specific diagnosis beats a status code, which is why
+    //    the routing, reach and rule checks come first: putting this guard first replaced
+    //    three useful sentences with "we answered 400". What is left for it is the residue it
+    //    is actually good at, an answer no rule explains: a 405 from a method mismatch, a 404
+    //    from a destination we do not serve, a 500 from our own code.
+    const refused = firstRefusedLeg(c.legs);
+    if (refused)
+      return { rule: "canary.refused", verdict: "FAIL",
+               why: `every rule passed, yet this Company answered ${refused.method} ${refused.path} at ${refused.origin} with ${refused.status}`
+                    + `${refused.error ? ` and ${refused.error}` : ""}, on a request built by the protocol authors' own signing code, so this deployment would stop a conforming agent for a reason no rule here explains` };
+
     return null;
   }
 

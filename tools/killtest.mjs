@@ -28,7 +28,9 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const FILE = "tests/runs.test.mjs";
+// Each mutation names the test file that must notice it, so a run stays fast and so a
+// mutation cannot be credited to a test in a file that was never executed.
+const DEFAULT_FILE = "tests/runs.test.mjs";
 
 export const MUTATIONS = [
   // the canary gate
@@ -77,6 +79,41 @@ export const MUTATIONS = [
   { id: "privacy/token-in-page", file: "rig.mjs", kills: "headers that keep it private",
     find: "      res.end(html);", to: "      res.end(html + `<!-- run ${rep[1]} -->`);" },
 
+  // enforcement: what this Company refuses rather than reports
+  { id: "enforce/refuses-documents", file: "enforce.mjs", tests: "tests/enforce.test.mjs",
+    kills: "not a destination is never refused",
+    find: "  if (!record || !record.isResource) return null;", to: "  if (!record) return null;" },
+  { id: "enforce/wrong-status", file: "enforce.mjs", tests: "tests/enforce.test.mjs",
+    kills: "refused with the error 1.0 names for it",
+    find: "const INVALID_SESSION = 400, VERSION_UNSUPPORTED = 400;",
+    to: "const INVALID_SESSION = 401, VERSION_UNSUPPORTED = 400;" },
+  { id: "enforce/wrong-error-code", file: "enforce.mjs", tests: "tests/enforce.test.mjs",
+    kills: "refused with the error 1.0 names for it",
+    find: "    ? { status: VERSION_UNSUPPORTED, error: \"version_unsupported\" }",
+    to: "    ? { status: VERSION_UNSUPPORTED, error: \"invalid_session\" }" },
+  { id: "enforce/says-session-ended", file: "enforce.mjs", tests: "tests/enforce.test.mjs",
+    kills: "session_ended is never emitted",
+    find: "    : { status: INVALID_SESSION, error: \"invalid_session\" };",
+    to: "    : { status: INVALID_SESSION, error: \"session_ended\" };" },
+  { id: "enforce/precedence-reversed", file: "enforce.mjs", tests: "tests/enforce.test.mjs",
+    kills: "precedence follows the order 5.3 verifies in",
+    find: "  for (const id of ENFORCED) {\n    const v = byId.get(id);",
+    to: "  for (const id of [...ENFORCED].reverse()) {\n    const v = byId.get(id);" },
+  { id: "enforce/no-resource-metadata", file: "enforce.mjs", tests: "tests/enforce.test.mjs",
+    kills: "an access token this Company never issued is an OAuth error",
+    find: "    + `resource_metadata=\"${String(origin).replace(/\\/+$/, \"\")}/.well-known/oauth-protected-resource\"`;",
+    to: "    + ``;" },
+  { id: "enforce/no-response-record", file: "server.mjs", tests: "tests/server.test.mjs",
+    kills: "status this Company answers and the verdict it records can never disagree",
+    find: "    record.response = { status, error: body?.error ?? null };", to: "" },
+  { id: "enforce/identifier-issuer-only", file: "discovery.mjs", tests: "tests/discovery.test.mjs",
+    kills: "a Company with no issuer still has an identifier",
+    find: "  const domain = discovery?.organization?.domain;\n  if (typeof domain === \"string\" && domain) return `https://${domain.toLowerCase()}`.replace(/\\/+$/, \"\");",
+    to: "" },
+  { id: "gate/accepts-refused-leg", file: "rig.mjs", tests: "tests/runs.test.mjs",
+    kills: "refuses to grade when its own conforming traffic is answered with an error",
+    find: "  for (const leg of legs ?? []) if (!(leg.status >= 200 && leg.status < 300)) return leg;", to: "" },
+
   // the recorder's own guards, which the run model now leans on
   { id: "record/control-recorded", file: "server.mjs", kills: "control-plane requests never are",
     find: "    if (config.control && config.control(req, res, rawTarget)) return;",
@@ -109,10 +146,10 @@ if (existsSync(BACKUP)) {
 }
 
 const TIMEOUT_MS = 90_000;
-function runSuite() {
+function runSuite(file = DEFAULT_FILE) {
   try {
     const out = execFileSync(process.execPath,
-      ["--experimental-strip-types", "--test", FILE],
+      ["--experimental-strip-types", "--test", ...String(file).split(" ")],
       { cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: TIMEOUT_MS });
     return { failed: false, out };
   } catch (err) {
@@ -121,13 +158,16 @@ function runSuite() {
   }
 }
 
-const base = runSuite();
-if (base.failed) {
-  console.error("the suite does not pass before any mutation, so nothing below would mean anything");
-  console.error(base.out.split("\n").filter(l => l.startsWith("not ok")).join("\n"));
-  process.exit(2);
+for (const file of new Set(picked.map(m => m.tests ?? DEFAULT_FILE))) {
+  const base = runSuite(file);
+  if (base.failed) {
+    console.error(`${file} does not pass before any mutation, so nothing below would mean anything`);
+    console.error(base.out.split("\n").filter(l => l.startsWith("not ok")).join("\n"));
+    process.exit(2);
+  }
+  console.log(`control: ${file} passes unmutated`);
 }
-console.log(`control: ${FILE} passes unmutated\n`);
+console.log("");
 
 let survived = 0, miscredited = 0;
 for (const m of picked) {
@@ -142,7 +182,7 @@ for (const m of picked) {
   try {
     writeFileSync(BACKUP, JSON.stringify({ file: m.file, content: before }));
     writeFileSync(path, before.replace(m.find, m.to));
-    const r = runSuite();
+    const r = runSuite(m.tests ?? DEFAULT_FILE);
     const dead = r.out.split("\n").filter(l => l.startsWith("not ok")).map(l => l.slice(5));
     const named = dead.some(l => l.includes(m.kills));
     if (r.hung) {

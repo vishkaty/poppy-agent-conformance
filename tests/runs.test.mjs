@@ -192,7 +192,9 @@ test("the token is never written to any console stream", async () => {
     assert.equal(made.status, 201);
     assert.equal(b.status, 200, "the run did not end, so the paths below were never exercised");
     assert.equal(c.status, 200, "the report was never served, so nothing could have logged it");
-    assert.ok(a.status === 200 || a.status === 404);
+    // A bare request to a destination is refused now, which is the point of enforcement:
+    // 5.3 makes it invalid_session, and the request is still recorded and judged.
+    assert.equal(a.status, 400, `a bare request to a destination answered ${a.status}`);
     assert.match(token ?? "", /^[A-Za-z0-9_-]{22}$/, "no token, so the search below would pass for free");
     assert.ok(out.some(l => l.includes("capture-control-sentinel")),
       "the console capture does not work, so this test proves nothing");
@@ -524,5 +526,40 @@ test("health says what a 404 cannot: which process this is and since when", asyn
     const after = await (await fetch(`${base}/grader/health`)).json();
     assert.equal(after.lease_held, true);
     assert.ok(!JSON.stringify(after).includes(token), "health leaks the holder's token");
+  } finally { await r.close(); }
+});
+
+test("the gate refuses to grade when its own conforming traffic is answered with an error", async () => {
+  // Enforcement makes this the sharpest failure mode this deployment has. If our own
+  // configuration refuses traffic the protocol authors' code built, every builder would be
+  // stopped at their first request and told their Session was invalid. The rule verdicts are
+  // one guard; the HTTP status is a second and a blunter one, because it catches an answer no
+  // rule covers: a 405 from a method mismatch, a 404 from a destination we do not serve, a
+  // 500 from our own code.
+  const { firstRefusedLeg } = await import("../rig.mjs");
+  assert.equal(firstRefusedLeg([{ status: 200, path: "/a" }, { status: 201, path: "/b" }]), null);
+  assert.equal(firstRefusedLeg([]), null);
+  const bad = firstRefusedLeg([{ status: 200, path: "/a" }, { status: 400, path: "/poppy/orders", error: "invalid_session" }]);
+  assert.ok(bad, "a 400 on the grader's own conforming traffic was accepted");
+  assert.equal(bad.status, 400);
+  assert.equal(bad.path, "/poppy/orders");
+  for (const status of [301, 400, 401, 403, 404, 405, 409, 500, 503])
+    assert.ok(firstRefusedLeg([{ status, path: "/x" }]), `${status} was treated as success`);
+});
+
+test("a deployment that refuses the authors own traffic grades nobody", async () => {
+  // End to end, with a Company whose published issuer is on another origin, so the htu the
+  // canary signs cannot match the URL the grader compares it against and enforcement refuses
+  // every leg. Before the status guard this answered 503 for the rule verdict; now it answers
+  // for the refusal itself, which is the more useful sentence.
+  const wrongIssuer = c => ({ ...c, discovery: (o) => ({ ...discoveryFor(o),
+                              auth: { issuer: "https://elsewhere.example/poppy" } }) });
+  const { r, base } = await rig({ companies: COMPANIES().map(wrongIssuer) });
+  try {
+    const res = await fetch(`${base}/grader/runs`, { method: "POST" });
+    assert.equal(res.status, 503, "a grader that refuses conforming traffic graded a builder");
+    const body = await res.json();
+    assert.equal(body.error, "grader_control_failed");
+    assert.match(body.rule, /^canary\.refused$|^session\./, `fired on ${body.rule}`);
   } finally { await r.close(); }
 });

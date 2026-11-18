@@ -142,6 +142,36 @@ export const CHECKS = [
     },
   },
   {
+    id: "session.header-jwt",
+    section: "5.2",
+    quote: "The header holds a JWT that the Personal Agent signs for that one request, with a delegated key that a key from its `jwks_uri` vouches for",
+    // The gap this filled: a header present but not a JWT at all passed EVERYTHING. Every
+    // Session rule reads `sessionRequests`, which decodes the header and skips what it cannot
+    // decode, and session.header-sent only asks whether a value was sent. So an agent that
+    // sent the literal string "not-a-jwt" was told nothing was wrong, and under enforcement
+    // it was answered 200. Found by writing the test that the status and the verdict can
+    // never disagree.
+    //
+    // It covers BOTH ways the sentence can be broken, because there is one sentence and this
+    // project refuses two checks for one. Two Poppy-Session headers are joined by Node into
+    // one undecodable string, so a repeated header and a header holding something that is not
+    // a JWT are the same failure of the same rule, and the evidence says which it was.
+    run(log) {
+      const carrying = log.filter(r => r.isResource && r.headers?.["poppy-session"] !== undefined);
+      if (!carrying.length) return SKIP("no request to a resource endpoint carried the header");
+      const bad = [], hits = [];
+      for (const r of carrying) {
+        if (r.sessionHeaderDuplicated)
+          note(bad, hits, r, `${r.method} ${r.path}: ${r.sessionHeaderCount} Poppy-Session headers, so no single JWT signs the request`);
+        else if (!decodeJwt(r.headers["poppy-session"]))
+          note(bad, hits, r, `${r.method} ${r.path}: the header held ${JSON.stringify(String(r.headers["poppy-session"]).slice(0, 24))}, which is not a JWT`);
+      }
+      return bad.length
+        ? FAIL("a Poppy-Session header did not hold one JWT for that request", bad.slice(0, 3), hits)
+        : PASS(`every one of ${carrying.length} Session header(s) held a single decodable JWT`);
+    },
+  },
+  {
     id: "session.typ",
     section: "5.2",
     quote: "`typ` MUST be `poppy-session+jwt`, so the JWT can't be mistaken for a client assertion, delegation, or any other JWT",
@@ -632,24 +662,6 @@ export const CHECKS = [
       }
       return bad.length ? FAIL("ath did not match the access token on the request", bad.slice(0, 3), hits)
                         : PASS(`ath matched the access token on all ${s.length} request(s)`);
-    },
-  },
-  {
-    id: "session.header-single",
-    section: "5.2",
-    quote: "The header holds a JWT that the Personal Agent signs for that one request, with a delegated key that a key from its `jwks_uri` vouches for",
-    // One header, one JWT, one request. Two Poppy-Session headers are joined by Node into
-    // one undecodable string, and left undetected that reads as "no Session header was
-    // sent" on every claim check while session.header-sent passes: a self-contradicting
-    // report that blames the agent for the wrong thing. record.mjs flags it instead.
-    run(log) {
-      const resource = log.filter(r => r.isResource);
-      if (!resource.length) return SKIP("the agent made no request to a resource endpoint");
-      const dupes = resource.filter(r => r.sessionHeaderDuplicated);
-      return dupes.length
-        ? FAIL("a request carried more than one Poppy-Session header, so no single JWT signs it",
-               dupes.slice(0, 3).map(r => `${r.method} ${r.path}`), dupes)
-        : PASS(`every one of ${resource.length} resource request(s) carried a single Session header`);
     },
   },
   {

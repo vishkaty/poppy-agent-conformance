@@ -10,7 +10,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { recordOf, classify, pathOf, allowedMethodsFor } from "./record.mjs";
 import { resourceMetadataFor, authServerMetadataFor, authServerMetadataPath, discoveryFor,
-         openapiFor, operationsToTemplates, DEFAULT_OPERATIONS } from "./discovery.mjs";
+         openapiFor, operationsToTemplates, DEFAULT_OPERATIONS, identifierOf } from "./discovery.mjs";
+import { enforce, tokenChallenge } from "./enforce.mjs";
 
 const DEFAULT_MAX_BODY = 256 * 1024;
 const DEFAULT_TEST_AGENT_PREFIX = "/test-agent";
@@ -187,6 +188,23 @@ export function createGrader(cfg) {
     else socket.destroy();
   });
 
+  // What this Company IS, as the checks read it: its own published document decides, never a
+  // Host header, for the reason record.mjs gives.
+  function contextOf(cfg) {
+    const d = cfg.discovery ?? {};
+    return { identifier: identifierOf(d), domain: d.organization?.domain,
+             protocolVersion: d.protocol_version };
+  }
+
+  // Every response goes through here, so a record always says what the agent was told. The
+  // report shows it, and a test asserts the record's response matches what enforcement
+  // decided for that same record.
+  function answer(res, record, status, body, headers = {}) {
+    record.response = { status, error: body?.error ?? null };
+    res.writeHead(status, { "content-type": "application/json", ...headers });
+    res.end(JSON.stringify(body));
+  }
+
   function respond(req, res, record) {
     // Just enough to be a destination. The grader's purpose is what the agent sent, not
     // what we return, so the bodies are minimal and documented as fixtures.
@@ -233,14 +251,40 @@ export function createGrader(cfg) {
         // A method mismatch on a real destination, which 404 would misreport as a wrong path.
         const allow = allowedMethodsFor(record.url, config);
         if (allow.length) {
-          res.writeHead(405, { "content-type": "application/json", allow: allow.join(", ") });
-          res.end(JSON.stringify({ error: "invalid_request",
-            detail: `this endpoint takes ${allow.join(" or ")}` }));
+          answer(res, record, 405, { error: "invalid_request",
+            detail: `this endpoint takes ${allow.join(" or ")}` }, { allow: allow.join(", ") });
           return;
         }
+        answer(res, record, 404, { error: "not_found" });
+        return;
       }
-      res.writeHead(record.isResource ? 200 : 404, { "content-type": "application/json" });
-      res.end(JSON.stringify(record.isResource ? { ok: true } : { error: "not_found" }));
+
+      // A destination. Decided HERE, after the body has fully arrived, from the same check
+      // implementations the report uses, so the status and the verdict cannot disagree.
+      //
+      // Deciding earlier was possible, since every enforced rule reads headers only, but
+      // answering with the body unread resets the client mid upload, leaves bodyComplete
+      // false on the record, and makes the retry look like the reset upload that
+      // session.jti-unique deliberately excuses.
+      const ctx = contextOf(config);
+      const refusal = config.enforce === false ? null : enforce(record, ctx);
+      if (refusal) {
+        record.rejection = { rule: refusal.rule, error: refusal.body.error };
+        answer(res, record, refusal.status, refusal.body, refusal.headers);
+        return;
+      }
+
+      // The Session stands. An access token can only now be the problem, and it is an OAuth
+      // error rather than a Session one: 5.3's steps are what a Company "MUST complete before
+      // relying on Session claims", so a request failing both is told about its Session first.
+      if (config.enforce !== false && record.headers?.authorization) {
+        const c = tokenChallenge(config.origin);
+        record.rejection = { rule: "token.not-issued", error: c.body.error };
+        answer(res, record, c.status, c.body, c.headers);
+        return;
+      }
+
+      answer(res, record, 200, { ok: true });
     };
     if (delay > 0) setTimeout(send, delay); else send();
   }
