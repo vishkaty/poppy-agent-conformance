@@ -25,7 +25,13 @@ export function discoveryFor(origin, { name = "Grader Shop", withExtensions = fa
   return {
     protocol_version: "1.0",
     organization: { name, domain },
-    auth: { issuer },
+    // 3.2: "A Company that has an issuer but offers Personal Agents no sign-in sets
+    // `auth.disabled` to `true` in `poppy.json`." That is exactly this Company: it keeps an
+    // issuer so that `aud` is an issuer like the ones builders meet, and offers no sign-in.
+    // Saying so is what stops an agent attempting one, and it is why the eight client
+    // assertion checks in the authors' own validator stop warning: 3.2 lets a Company in this
+    // state answer every refresh with invalid_grant "without verifying the client assertion".
+    auth: { issuer, disabled: true },
     agent: {
       protocols: [{
         type: "poppy",
@@ -157,6 +163,16 @@ export function authServerMetadataFor(origin) {
     token_endpoint_auth_methods_supported: ["private_key_jwt"],
     token_endpoint_auth_signing_alg_values_supported: ["ES256", "PS384"],
   };
+}
+
+// The OAuth endpoints this Company serves, so the classifier knows they are OAuth endpoints.
+//
+// 5.2: "Discovery and description documents and OAuth endpoints don't carry this header." A
+// Session header arriving at one is a breach, and it can only be judged if these paths are
+// classified as OAuth endpoints rather than as nothing.
+export function authServerEndpointsFor(origin) {
+  const m = authServerMetadataFor(origin);
+  return [m.token_endpoint, m.revocation_endpoint].filter(Boolean);
 }
 
 // The path RFC 8414 section 3.1 defines for an issuer with a path: the well-known segment

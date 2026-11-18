@@ -12,6 +12,7 @@ import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { discoveryFor } from "../discovery.mjs";
+import { get, post } from "./http.mjs";
 import { createGrader } from "../server.mjs";
 import { classify } from "../record.mjs";
 
@@ -242,5 +243,49 @@ test("a conforming agent at a Company with no issuer is not failed on aud", asyn
     const v = grade([g.records.at(-1)], { identifier: id, domain: d.organization.domain })
       .find(x => x.id === "session.aud");
     assert.equal(v.verdict, "PASS", `${v.verdict}: ${v.why}`);
+  } finally { await g.close(); }
+});
+
+test("sign-in is declared off the way 3.2 says, and the token endpoint behaves as 3.2 allows", async () => {
+  // This Company has an issuer, so that `aud` is an issuer like the ones builders will meet,
+  // and offers no sign-in at all. 3.2 has a field for exactly that: "A Company that has an
+  // issuer but offers Personal Agents no sign-in sets `auth.disabled` to `true`."
+  //
+  // And it says what such a Company does at its token endpoint: "A Company that sets
+  // `auth.disabled` and has never issued a refresh token to a Personal Agent has no tokens to
+  // protect: it answers every refresh with `invalid_grant` (RFC 6749 §5.2) and every
+  // revocation with success (RFC 7009 §2.2). It MAY do so without verifying the client
+  // assertion (4.1)." Before this, both endpoints were advertised in the OAuth metadata and
+  // answered 404, which is the same dead end as an unserved OpenAPI document.
+  const g = createGrader({ origin: "http://127.0.0.1", operations: OPERATIONS });
+  const port = await g.listen(0);
+  g.setOrigin(`http://127.0.0.1:${port}`);
+  try {
+    const d = g.config.discovery;
+    assert.equal(d.auth.disabled, true, "poppy.json does not declare sign-in off");
+    assert.ok(d.auth.issuer, "the issuer is still needed, because it is the Company's identifier");
+
+    const meta = await (await fetch(`${g.config.origin}/.well-known/oauth-authorization-server/poppy`)).json();
+    const token = await post(meta.token_endpoint, {
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: "grant_type=refresh_token&refresh_token=whatever",
+    });
+    assert.equal(token.status, 400, token.text);
+    assert.equal(token.body?.error, "invalid_grant", token.text);
+
+    const revoke = await post(meta.revocation_endpoint, {
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: "token=whatever",
+    });
+    assert.equal(revoke.status, 200, `revocation answered ${revoke.status}, and RFC 7009 §2.2 makes it a success`);
+
+    // 5.2: "Discovery and description documents and OAuth endpoints don't carry this header."
+    // So a Session header arriving here is a breach session.not-on-documents must judge, which
+    // means these paths have to be classified as OAuth endpoints and not as nothing.
+    for (const url of [meta.token_endpoint, meta.revocation_endpoint]) {
+      const c = classify(url, "POST", g.config);
+      assert.equal(c.mustNotCarry, true, `${url} is not classified as an OAuth endpoint: ${c.why}`);
+      assert.equal(c.isResource, false, `${url} was classified as a Session destination`);
+    }
   } finally { await g.close(); }
 });

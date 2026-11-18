@@ -10,7 +10,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { recordOf, classify, pathOf, allowedMethodsFor } from "./record.mjs";
 import { resourceMetadataFor, authServerMetadataFor, authServerMetadataPath, discoveryFor,
-         openapiFor, operationsToTemplates, DEFAULT_OPERATIONS, identifierOf } from "./discovery.mjs";
+         openapiFor, operationsToTemplates, DEFAULT_OPERATIONS, identifierOf,
+         authServerEndpointsFor } from "./discovery.mjs";
 import { enforce, tokenChallenge } from "./enforce.mjs";
 
 const DEFAULT_MAX_BODY = 256 * 1024;
@@ -94,6 +95,10 @@ export function createGrader(cfg) {
     ...base,
     openapi: operations ? openapiFor(origin, operations) : null,
     apiOperations: cfg.apiOperations ?? (operations ? operationsToTemplates(operations) : []),
+    // The OAuth endpoints this Company serves, from the same builder the metadata comes from,
+    // so the classifier cannot disagree with the document about what is an OAuth endpoint.
+    authServerEndpoints: cfg.authServerEndpoints
+      ?? (base.discovery?.auth?.issuer ? authServerEndpointsFor(origin) : []),
   });
   let config = withApi(cfg.origin, { ...cfg, discovery: derive(cfg.origin) });
   const warnings = validateConfig(config);
@@ -239,6 +244,32 @@ export function createGrader(cfg) {
         }
         res.writeHead(404, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: "not_found" }));
+        return;
+      }
+
+      // 3.2: a Company with auth.disabled that has never issued a refresh token "answers every
+      // refresh with `invalid_grant` (RFC 6749 §5.2) and every revocation with success
+      // (RFC 7009 §2.2). It MAY do so without verifying the client assertion (4.1)." Both were
+      // advertised in the OAuth metadata and answered 404 before, which is the same dead end
+      // as advertising an OpenAPI document nothing serves.
+      const oauth = config.discovery?.auth?.issuer ? authServerEndpointsFor(config.origin) : [];
+      const [tokenEndpoint, revocationEndpoint] = oauth.map(u => pathOf(u));
+      if (record.path === tokenEndpoint || record.path === revocationEndpoint) {
+        if (record.method !== "POST") {
+          answer(res, record, 405, { error: "invalid_request", detail: "this endpoint takes POST" },
+                 { allow: "POST" });
+          return;
+        }
+        if (record.path === revocationEndpoint) {
+          // RFC 7009 §2.2: a successful response is 200 with an empty body.
+          record.response = { status: 200, error: null };
+          res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+          res.end("");
+          return;
+        }
+        answer(res, record, 400, { error: "invalid_grant",
+          error_description: "this Company has issued no refresh token, and declares auth.disabled" },
+          { "cache-control": "no-store" });
         return;
       }
 
