@@ -8,7 +8,13 @@
 // on a conversation protocol entry. Both were found by their validator and missed by our
 // own tests, because nothing of ours read their schema. Now something does:
 // tests/discovery.test.mjs judges this with their schema validator and their schema.
-export function discoveryFor(origin, { name = "Grader Shop", withExtensions = true } = {}) {
+// `web` and `extensions` are OFF by default, because this Company does not implement them and
+// a document that advertises a URL nothing serves is a dead end we created: an agent follows
+// it, gets a 404, and every rule beyond that point is reported as not reached by the agent.
+// The authors' own validator found exactly this in us, twice. A deployment that implements
+// section 6 or an extension turns them on, and the classifier has always known both shapes.
+export function discoveryFor(origin, { name = "Grader Shop", withExtensions = false,
+                                       withWeb = false } = {}) {
   const u = new URL(origin);
   // 3.1: "`domain` MUST be the host that serves the document, after any redirects, with its
   // port when that isn't 443." URL.host is exactly that: it carries a non-default port and
@@ -34,7 +40,7 @@ export function discoveryFor(origin, { name = "Grader Shop", withExtensions = tr
       url: `${origin}/poppy/openapi.json`,
       description: "A small read-only API, so an agent has a signed-out request to make.",
     }],
-    web: { browser_session_endpoint: `${origin}/poppy/browser-session` },
+    ...(withWeb ? { web: { browser_session_endpoint: `${origin}/poppy/browser-session` } } : {}),
     tasks: { endpoint: `${origin}/poppy/tasks` },
     ...(withExtensions
       // 3.1: extensions are "keyed by name, with an entry for each version", so the value is

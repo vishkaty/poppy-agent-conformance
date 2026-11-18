@@ -241,14 +241,20 @@ export const CHECKS = [
       const s = sessionRequests(log);
       if (!s.length) return SKIP("no Session header was sent");
       const bySid = new Map();
-      for (const { jwt } of s) {
+      for (const { r, jwt } of s) {
         const sid = jwt.payload.sid;
-        (bySid.get(sid) ?? bySid.set(sid, new Set()).get(sid)).add(JSON.stringify([jwt.payload.sub, jwt.payload.agent_id ?? null]));
+        const e = bySid.get(sid) ?? bySid.set(sid, { values: new Set(), requests: [] }).get(sid);
+        e.values.add(JSON.stringify([jwt.payload.sub, jwt.payload.agent_id ?? null]));
+        e.requests.push(r);
       }
-      const bad = [...bySid].filter(([, v]) => v.size > 1);
+      const bad = [...bySid].filter(([, v]) => v.values.size > 1);
       if (!bySid.size) return SKIP("no sid was sent");
+      // Only the Sessions that changed. Naming every request meant a run with two Sessions,
+      // one of them fine, pointed the builder at both.
       return bad.length
-        ? FAIL("sub or agent_id changed within one Session", bad.map(([sid, v]) => `sid ${String(sid).slice(0, 12)}: ${v.size} different values`), s.map(x => x.r))
+        ? FAIL("sub or agent_id changed within one Session",
+               bad.map(([sid, v]) => `sid ${String(sid).slice(0, 12)}: ${v.values.size} different values`),
+               bad.flatMap(([, v]) => v.requests))
         : PASS(`sub and agent_id were stable across ${bySid.size} Session(s)`);
     },
   },
@@ -282,20 +288,22 @@ export const CHECKS = [
         if (j === undefined || j === "") continue;    // claims-present reports those
         if (r.bodyComplete === false) { incomplete++; continue; }
         const shape = `${r.method} ${htuOf(r) ?? r.path} ${r.body ?? ""}`;
-        (byJti.get(j) ?? byJti.set(j, new Set()).get(j)).add(shape);
+        const e = byJti.get(j) ?? byJti.set(j, { shapes: new Set(), requests: [] }).get(j);
+        e.shapes.add(shape); e.requests.push(r);
       }
       if (!byJti.size)
         return SKIP(incomplete
           ? `${incomplete} request(s) carried a jti but their bodies were never fully received, so none could be compared`
           : "no jti was sent");
-      const replayed = [...byJti].filter(([, shapes]) => shapes.size > 1);
+      const replayed = [...byJti].filter(([, v]) => v.shapes.size > 1);
       const complete = s.length - incomplete;
       const note = incomplete
         ? `; ${incomplete} request(s) were left out because the body was never fully received, which a reset upload and its retry look like`
         : "";
       if (replayed.length) return FAIL(
         "one jti signed requests that differ, so a signature was replayed onto another request",
-        replayed.map(([j, sh]) => `${String(j).slice(0, 16)} signed ${sh.size} different requests`).slice(0, 3), s.map(x => x.r));
+        replayed.map(([j, v]) => `${String(j).slice(0, 16)} signed ${v.shapes.size} different requests`).slice(0, 3),
+        replayed.flatMap(([, v]) => v.requests));
       return byJti.size < complete
         ? PASS(`no jti signed two different requests; ${complete - byJti.size} identical resend(s) seen, which 5.3 leaves to the Company to reject${note}`)
         : PASS(`all ${byJti.size} jti values were distinct${note}`);
@@ -328,15 +336,19 @@ export const CHECKS = [
     quote: "`exp` MUST be at most 24 hours after `iat`.",
     run(log) {
       const s = sessionRequests(log);
-      const dlgs = s.map(x => decodeJwt(x.jwt.header.poppy_dlg)).filter(Boolean);
-      if (!dlgs.length) return SKIP("no delegation was sent");
+      // The request is kept beside its delegation. Dropping it named every request in the
+      // run as deciding the failure, which the authors' own validator exposed: it sends one
+      // over-long delegation among otherwise conforming traffic, and the report sent a
+      // builder to 28 requests that were fine.
+      const pairs = s.map(x => ({ r: x.r, d: decodeJwt(x.jwt.header.poppy_dlg) })).filter(p => p.d);
+      if (!pairs.length) return SKIP("no delegation was sent");
       const bad = []; const hits = [];
-      for (const d of dlgs) {
+      for (const { r, d } of pairs) {
         const { iat, exp } = d.payload;
-        if (typeof iat !== "number" || typeof exp !== "number") { bad.push(`iat or exp was not a number`); continue; }
-        if (exp - iat > 86400) bad.push(`exp was ${Math.round((exp - iat) / 3600)}h after iat`);
+        if (typeof iat !== "number" || typeof exp !== "number") { note(bad, hits, r, `iat or exp was not a number`); continue; }
+        if (exp - iat > 86400) note(bad, hits, r, `exp was ${Math.round((exp - iat) / 3600)}h after iat`);
       }
-      return bad.length ? FAIL("a delegation lasted longer than 24 hours", [...new Set(bad)].slice(0, 3), s.map(x => x.r))
+      return bad.length ? FAIL("a delegation lasted longer than 24 hours", [...new Set(bad)].slice(0, 3), [...new Set(hits)])
                         : PASS("every delegation expired within 24 hours of issue");
     },
   },
@@ -348,7 +360,7 @@ export const CHECKS = [
     // delegation travels in a header the agent signs for us.
     run(log, ctx) {
       const s = sessionRequests(log);
-      const pairs = s.map(x => ({ dlg: decodeJwt(x.jwt.header.poppy_dlg), ses: x.jwt })).filter(p => p.dlg);
+      const pairs = s.map(x => ({ r: x.r, dlg: decodeJwt(x.jwt.header.poppy_dlg), ses: x.jwt })).filter(p => p.dlg);
       if (!pairs.length) return SKIP("no delegation was sent");
       // Exact leaf values, not a substring search over the payload.
       //
@@ -364,7 +376,7 @@ export const CHECKS = [
         out.push(String(v)); return out;
       };
       const bad = []; const hits = [];
-      for (const { dlg, ses } of pairs) {
+      for (const { r, dlg, ses } of pairs) {
         const payload = { ...dlg.payload };
         delete payload.iss;    // required by 5.2
         delete payload.cnf;    // the delegated key itself, random by construction
@@ -372,13 +384,13 @@ export const CHECKS = [
         const hostOf = x => { try { return new URL(x).host.toLowerCase(); } catch { return null; } };
         for (const [what, value] of [["the User ID", ses.payload.sub], ["the Agent ID", ses.payload.agent_id],
                                      ["this Company's identifier", ctx.identifier]]) {
-          if (value && vals.has(String(value))) bad.push(`the delegation contains ${what}`);
+          if (value && vals.has(String(value))) note(bad, hits, r, `the delegation contains ${what}`);
         }
         if (ctx.domain) for (const v of vals)
           if (v.toLowerCase() === String(ctx.domain).toLowerCase() || hostOf(v) === String(ctx.domain).toLowerCase())
-            bad.push("the delegation names this Company's domain");
+            note(bad, hits, r, "the delegation names this Company's domain");
       }
-      return bad.length ? FAIL("a delegation carried something it must not", [...new Set(bad)].slice(0, 4), s.map(x => x.r))
+      return bad.length ? FAIL("a delegation carried something it must not", [...new Set(bad)].slice(0, 4), [...new Set(hits)])
                         : PASS("no delegation carried a User ID, Agent ID, or anything naming this Company");
     },
   },
@@ -404,18 +416,24 @@ export const CHECKS = [
       const withHeader = sessionRequests(log).filter(x => x.r.isResource);
       const any = resource.filter(r => r.headers?.["poppy-version"]);
       if (!any.length) return FAIL("no request carried a Poppy-Version header", [], resource);
+      // The FIRST request carrying each distinct value, per Session. Naming every request in
+      // the Session was not wrong, since they are all in the Session that breached, but
+      // against a long run it named 29 of 37 and left the builder to find the change
+      // themselves, which is the work this report exists to do.
       const bySid = new Map();
       for (const { r, jwt } of withHeader) {
         const sid = jwt.payload.sid;
         if (sid === undefined) continue;
-        const v = r.headers?.["poppy-version"] ?? null;
-        (bySid.get(sid) ?? bySid.set(sid, new Set()).get(sid)).add(String(v));
+        const e = bySid.get(sid) ?? bySid.set(sid, new Map()).get(sid);
+        const v = String(r.headers?.["poppy-version"] ?? null);
+        if (!e.has(v)) e.set(v, r);                  // first sighting of this value
       }
       if (!bySid.size) return SKIP("no request carried both a Session header and a sid");
       const mixed = [...bySid].filter(([, v]) => v.size > 1);
       return mixed.length
         ? FAIL("Poppy-Version changed within one Session",
-               mixed.map(([sid, v]) => `sid ${String(sid).slice(0, 12)}: ${[...v].join(", ")}`).slice(0, 3), withHeader.map(x => x.r))
+               mixed.map(([sid, v]) => `sid ${String(sid).slice(0, 12)}: ${[...v.keys()].join(", ")}`).slice(0, 3),
+               mixed.flatMap(([, v]) => [...v.values()]))
         : PASS(`every Session declared one Poppy-Version across ${bySid.size} Session(s)`);
     },
   },

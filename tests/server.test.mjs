@@ -266,3 +266,43 @@ test("every endpoint the classifier reads is also checked against the control-pl
   assert.doesNotThrow(() => validateConfig({ origin: "http://127.0.0.1:8", discovery: DISCOVERY,
     controlPrefix: "/grader/", feedbackEndpoint: "http://127.0.0.1:8/poppy/feedback" }));
 });
+
+test("a test agent identity can be hosted, and its private key never is", async () => {
+  // The authors' own Company validator is the independent control on this Company, and it
+  // only runs past discovery when its test agent's `agent.json` and `jwks.json` are reachable
+  // over HTTPS. This serves exactly those two files from a directory and nothing else.
+  //
+  // The guard that matters: `keygen` writes `private-key.jwk` into the same directory. A
+  // static file map would have published the signing key of the identity it is testing with.
+  const { mkdtempSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const dir = mkdtempSync(join(tmpdir(), "poppy-identity-"));
+  writeFileSync(join(dir, "agent.json"), JSON.stringify({ client_id: "x", jwks_uri: "y" }));
+  writeFileSync(join(dir, "jwks.json"), JSON.stringify({ keys: [] }));
+  writeFileSync(join(dir, "private-key.jwk"), JSON.stringify({ kty: "EC", d: "SECRET-KEY-MATERIAL" }));
+  writeFileSync(join(dir, "config.json"), JSON.stringify({ client_id: "x" }));
+
+  await withGrader(async (g, port) => {
+    const at = p => fetch(`${base(port)}/test-agent/${p}`);
+    const agent = await at("agent.json");
+    assert.equal(agent.status, 200);
+    assert.match(agent.headers.get("content-type"), /json/);
+    assert.deepEqual(await agent.json(), { client_id: "x", jwks_uri: "y" });
+    assert.equal((await at("jwks.json")).status, 200);
+
+    for (const forbidden of ["private-key.jwk", "config.json", "private-key-rsa.jwk",
+                             "../agent.json", "..%2fagent.json"]) {
+      const res = await at(forbidden);
+      assert.equal(res.status, 404, `${forbidden} was served`);
+      assert.ok(!(await res.text()).includes("SECRET-KEY-MATERIAL"),
+        `${forbidden} leaked private key material`);
+    }
+  }, { testAgentIdentity: dir });
+});
+
+test("a hosted identity prefix may not collide with the control plane or a destination", async () => {
+  assert.throws(() => validateConfig({ origin: "http://127.0.0.1:8", discovery: DISCOVERY,
+    controlPrefix: "/grader/", testAgentIdentity: "/tmp", testAgentPrefix: "/grader/id" }),
+    /control-plane prefix/);
+});

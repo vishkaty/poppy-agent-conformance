@@ -6,11 +6,22 @@
 // at all.
 import { createServer } from "node:http";
 import { createHash } from "node:crypto";
-import { recordOf, classify, pathOf } from "./record.mjs";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { recordOf, classify, pathOf, allowedMethodsFor } from "./record.mjs";
 import { resourceMetadataFor, authServerMetadataFor, authServerMetadataPath, discoveryFor,
          openapiFor, operationsToTemplates, DEFAULT_OPERATIONS } from "./discovery.mjs";
 
 const DEFAULT_MAX_BODY = 256 * 1024;
+const DEFAULT_TEST_AGENT_PREFIX = "/test-agent";
+
+// The only two files a hosted test agent identity exposes.
+//
+// An allowlist of exact names, never a directory served by path, because `keygen` writes the
+// signing key into the same directory and a path-based map would publish it. The prefix is
+// also why this is not a general static file server: it exists so the authors' own validator,
+// which is the independent control on this Company, can run past discovery.
+const TEST_AGENT_FILES = ["agent.json", "jwks.json"];
 
 // Refuse a configuration that would make every verdict a statement about our deployment
 // rather than about the agent, and report destinations this grader cannot see.
@@ -41,6 +52,9 @@ export function validateConfig(cfg) {
   // A destination under the caller's control-plane prefix would be answered by the control
   // plane and examined by no rule, which reads as conformance. Refused, not shadowed.
   const prefix = cfg.controlPrefix;
+  const idPrefix = cfg.testAgentIdentity ? (cfg.testAgentPrefix ?? DEFAULT_TEST_AGENT_PREFIX) : null;
+  if (idPrefix && prefix && (idPrefix + "/").startsWith(prefix))
+    throw new Error(`testAgentPrefix is ${idPrefix}, under the control-plane prefix ${prefix}: the control plane would answer it`);
   const warnings = [];
   for (const [where, url] of listed) {
     let x;
@@ -52,6 +66,8 @@ export function validateConfig(cfg) {
       warnings.push(`${where} is ${url}, on ${x.origin}, which this grader does not serve: requests there are examined by no rule`);
     if (prefix && x.origin === parsed.origin && x.pathname.startsWith(prefix))
       throw new Error(`${where} is ${url}, under the control-plane prefix ${prefix}: the control plane would answer it and no rule would examine it`);
+    if (idPrefix && x.origin === parsed.origin && x.pathname.startsWith(idPrefix + "/"))
+      throw new Error(`${where} is ${url}, under the hosted test agent prefix ${idPrefix}: the identity files would answer it`);
   }
   return warnings;
 }
@@ -190,10 +206,38 @@ export function createGrader(cfg) {
         "/.well-known/oauth-protected-resource": () => resourceMetadataFor(config.origin),
         [authServerMetadataPath(config.origin)]: () => authServerMetadataFor(config.origin),
       };
+      // The two files of a hosted test agent identity, by exact name.
+      const idPrefix = config.testAgentIdentity
+        ? (config.testAgentPrefix ?? DEFAULT_TEST_AGENT_PREFIX) : null;
+      if (idPrefix && record.path?.startsWith(idPrefix + "/")) {
+        const name = record.path.slice(idPrefix.length + 1);
+        if (TEST_AGENT_FILES.includes(name)) {
+          try {
+            const body = readFileSync(join(config.testAgentIdentity, name));
+            res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+            res.end(body);
+            return;
+          } catch { /* fall through to the 404 below */ }
+        }
+        res.writeHead(404, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "not_found" }));
+        return;
+      }
+
       if (docs[record.path]) {
         res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
         res.end(JSON.stringify(docs[record.path]()));
         return;
+      }
+      if (!record.isResource) {
+        // A method mismatch on a real destination, which 404 would misreport as a wrong path.
+        const allow = allowedMethodsFor(record.url, config);
+        if (allow.length) {
+          res.writeHead(405, { "content-type": "application/json", allow: allow.join(", ") });
+          res.end(JSON.stringify({ error: "invalid_request",
+            detail: `this endpoint takes ${allow.join(" or ")}` }));
+          return;
+        }
       }
       res.writeHead(record.isResource ? 200 : 404, { "content-type": "application/json" });
       res.end(JSON.stringify(record.isResource ? { ok: true } : { error: "not_found" }));

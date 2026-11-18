@@ -172,6 +172,16 @@ export function sourceOf(req, cfg) {
   return req.socket?.remoteAddress ?? null;
 }
 
+// The methods that would make this path a destination.
+//
+// 8.2 creates a conversation with POST, so a GET there is a method mismatch and not a missing
+// endpoint. Answering 404 told an agent its endpoint was wrong when it was not, and made the
+// Company look as though it advertised something it does not serve.
+export function allowedMethodsFor(url, cfg) {
+  const all = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
+  return all.filter(m => classify(url, m, cfg).isResource);
+}
+
 // One record. `at` is Unix SECONDS and the caller SHOULD pass the time the request headers
 // arrived: stamping it when the response ends would add a long poll's own duration as
 // apparent clock skew and fail a conforming agent on the iat window.

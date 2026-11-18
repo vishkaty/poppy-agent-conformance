@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { CHECKS, PAIRWISE } from "../checks.mjs";
+import { CHECKS, PAIRWISE, grade } from "../checks.mjs";
 import { buildReport, renderHtml, REACH, anchorFor } from "../report.mjs";
 import * as f from "./fixture.mjs";
 
@@ -199,4 +199,81 @@ test("the control: traffic from the authors' signing code renders no FAIL", asyn
                 { ctx: CTX_B, log: [] }] });
   const fails = report.rules.flatMap(r => r.perCompany.filter(c => c.verdict === "FAIL").map(c => `${r.id}: ${c.why}`));
   assert.deepEqual(fails, [], "the report shows a FAIL against traffic built by the authors' own code");
+});
+
+test("a FAIL names the requests that breached, not every request in the Session", async () => {
+  // The authors' own validator exposed this against the live grader. It sends one deliberately
+  // over-long delegation among 29 otherwise conforming requests, and the report said the
+  // failure was "decided by" all 29. A builder would have gone looking at 28 requests that
+  // were fine. A failure a builder cannot trace to the right request is worse than a vague
+  // one, because it sends them somewhere with confidence.
+  const keys = await f.agentKeys();
+  const iat = Math.floor(Date.now() / 1000);
+  const ok = [await f.request(keys, {}), await f.request(keys, {}), await f.request(keys, {})];
+
+  const cases = [
+    ["delegation.exp-24h", await f.request(keys, { dlg: { iat, exp: iat + 25 * 3600 } })],
+    ["delegation.no-identifiers", await f.request(keys, { sub: "user-leaked",
+        dlg: { payload: { extra: "user-leaked" } } })],
+  ];
+  for (const [id, breach] of cases) {
+    const log = [...ok, breach];
+    const v = grade(log, f.ctx).find(x => x.id === id);
+    assert.equal(v.verdict, "FAIL", `${id} did not fail the breach: ${v.why}`);
+    assert.deepEqual(v.decidedBy, [breach],
+      `${id} named ${v.decidedBy.length} of ${log.length} requests as deciding it`);
+  }
+});
+
+test("a FAIL about a Session names that Session's requests and no others", async () => {
+  // The same defect in the form it takes for a rule about a whole Session rather than one
+  // request: the breach belongs to one Session ID, and the other Session's requests did
+  // nothing wrong.
+  const keys = await f.agentKeys();
+  const good = "sid-stable", bad = "sid-changes";
+  const log = [
+    await f.request(keys, { sid: good, sub: "user-a" }),
+    await f.request(keys, { sid: good, sub: "user-a" }),
+    await f.request(keys, { sid: bad, sub: "user-b" }),
+    await f.request(keys, { sid: bad, sub: "user-c" }),      // sub changed within one Session
+  ];
+  const v = grade(log, f.ctx).find(x => x.id === "session.sub-stable");
+  assert.equal(v.verdict, "FAIL", v.why);
+  assert.deepEqual(v.decidedBy, [log[2], log[3]],
+    "the failure named requests from the Session that did nothing wrong");
+});
+
+test("a replayed jti names the requests that share it", async () => {
+  const keys = await f.agentKeys();
+  const jti = "reused-" + Math.random().toString(36).slice(2);
+  const log = [
+    await f.request(keys, {}),
+    await f.request(keys, { jti, path: "/poppy/orders" }),
+    await f.request(keys, {}),
+    await f.request(keys, { jti, path: "/poppy/invoices" }),   // same jti, different request
+  ];
+  const v = grade(log, f.ctx).find(x => x.id === "session.jti-unique");
+  assert.equal(v.verdict, "FAIL", v.why);
+  assert.deepEqual(v.decidedBy, [log[1], log[3]],
+    "the replay named requests that carried a different jti");
+});
+
+test("a version change names the requests where it changed, not the whole Session", async () => {
+  // Against the live grader this named 29 of 37 requests. The Session really did carry three
+  // values, so it was not wrong, but a builder reading "decided by" 29 requests has to find
+  // the change themselves, which is the work the report exists to do.
+  const keys = await f.agentKeys();
+  const sid = "sid-one";
+  const log = [
+    await f.request(keys, { sid, version: "1.0" }),
+    await f.request(keys, { sid, version: "1.0" }),
+    await f.request(keys, { sid, version: "1.0" }),
+    await f.request(keys, { sid, version: "0.9" }),      // here
+    await f.request(keys, { sid, version: "0.9" }),
+    await f.request(keys, { sid, version: null }),        // and here
+  ];
+  const v = grade(log, f.ctx).find(x => x.id === "version.constant");
+  assert.equal(v.verdict, "FAIL", v.why);
+  assert.deepEqual(v.decidedBy, [log[0], log[3], log[5]],
+    "the failure did not point at the first request carrying each different value");
 });

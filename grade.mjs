@@ -70,6 +70,12 @@ const rig = createRig({
     origin: c.origin ?? "http://127.0.0.1",
     operations: c.operations,
     trustForwardedFor: c.trust_forwarded_for === true,
+    // Where the authors' own Company validator keeps its test agent identity. Setting this
+    // serves exactly agent.json and jwks.json from that directory, under /test-agent, so
+    // their validator can run past discovery against this deployment. The signing key in the
+    // same directory is never served, which a test asserts by name.
+    testAgentIdentity: c.test_agent_identity,
+    testAgentPrefix: c.test_agent_prefix,
     name: c.name,
   })),
 });

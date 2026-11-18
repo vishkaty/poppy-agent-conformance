@@ -163,3 +163,33 @@ test("the document and the classifier cannot disagree about what a destination i
       "a method the document does not describe was classified as a destination");
   } finally { await g.close(); }
 });
+
+test("every URL this Company publishes on its own origin is served", async () => {
+  // The general form of a defect the authors' own validator found in us twice: poppy.json
+  // advertised an OpenAPI document that nothing served, and a browser session endpoint that
+  // nothing served. An agent that follows our document and gets a 404 has reached a dead end
+  // we created, and every rule beyond it is reported as not reached by the agent.
+  const g = createGrader({ origin: "http://127.0.0.1", operations: OPERATIONS });
+  const port = await g.listen(0);
+  g.setOrigin(`http://127.0.0.1:${port}`);
+  try {
+    const d = g.config.discovery;
+    const urls = [
+      `${g.config.origin}/.well-known/poppy.json`,
+      ...(d.apis ?? []).map(a => a.url),
+      ...(d.agent?.protocols ?? []).map(p => p.endpoint),
+      ...(d.web?.browser_session_endpoint ? [d.web.browser_session_endpoint] : []),
+      ...(d.tasks?.endpoint ? [d.tasks.endpoint] : []),
+      ...Object.values(d.extensions ?? {}).flat().map(e => e.endpoint),
+      ...Object.values(d.supported_versions ?? {}),
+    ].filter(u => u && u.startsWith(g.config.origin));
+
+    const dead = [];
+    for (const url of urls) {
+      // A GET on a POST-only endpoint is not a dead end, so 405 and 404 are told apart.
+      const res = await fetch(url);
+      if (res.status === 404) dead.push(`${url} -> 404`);
+    }
+    assert.deepEqual(dead, [], "this Company advertises URLs it does not serve");
+  } finally { await g.close(); }
+});
