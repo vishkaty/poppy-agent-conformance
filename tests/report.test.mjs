@@ -317,3 +317,18 @@ test("the vendored provenance says plainly that the zip hash is not a content id
   assert.match(note, /not a content identifier|packaging|differs between downloads/,
     "nothing in the provenance warns that the zip hash changes without the content changing");
 });
+
+test("the page carries the same provenance as the data", async () => {
+  // Two outputs of one pure function, and the page is the one a builder actually reads. The
+  // oracle digest reached the JSON and not the page, so only a reader of the data could tell
+  // which code judged them.
+  const rep = buildReport({ token: "t", started: 1, ended: 2, frozen: true, warnings: [],
+                            graderCommit: "abc123def456",
+                            companies: [{ ctx: CTX_A, log: [] }, { ctx: CTX_B, log: [] }] });
+  const html = renderHtml(rep);
+  for (const [what, value] of [["the grader commit", rep.grader.commit],
+                               ["the oracle digest", rep.grader.oracle.digest],
+                               ["the grader clock", rep.grader.clock],
+                               ["the specification version", rep.spec.version]])
+    assert.ok(html.includes(String(value)), `the page does not carry ${what} (${value})`);
+});

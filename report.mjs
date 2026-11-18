@@ -353,7 +353,11 @@ export function renderHtml(rep) {
     + `<h2>Not judged</h2>${rules[1] || "<p>Every rule was judged.</p>"}`
     + `<details><summary>Passed</summary>${rules[2] || "<p>Nothing passed.</p>"}</details>`
     + `<h2>Requests</h2>${index || "<p>No request was recorded.</p>"}`
-    + `<h2>About this report</h2><p>${esc(a.judgedAgainst)}</p><p>Grader commit ${esc(rep.grader.commit)}.</p>`
+    + `<h2>About this report</h2><p>${esc(a.judgedAgainst)}</p>`
+    + `<p>Grader commit ${esc(rep.grader.commit)}, judged with the authors own `
+    + `${rep.grader.oracle.files} vendored files, content digest ${esc(rep.grader.oracle.digest)}. `
+    + `That digest is of the files themselves and not of the archive they came from, which `
+    + `changes between downloads of identical content.</p>`
     + `<p>${esc(a.scope)}</p><p>${esc(a.destinations)}</p>`
     + `<p>Not judged by this grader at all:</p><ul>${a.notJudged.map(x => `<li>${esc(x)}</li>`).join("")}</ul>`
     + `<p>Recorded but not judged: ${esc(JSON.stringify(a.recordedNotJudged))}.</p>`
