@@ -13,6 +13,7 @@
 //
 //   {
 //     "lease_seconds": 900,
+//     "reports_dir": "/var/lib/poppy-grader/reports",
 //     "companies": [
 //       { "origin": "https://poppy.example", "port": 8787, "trust_forwarded_for": true },
 //       { "origin": "https://poppy2.example", "port": 8788, "trust_forwarded_for": true }
@@ -63,6 +64,9 @@ const rig = createRig({
   leaseSeconds: config.lease_seconds,
   retentionSeconds: config.retention_seconds,
   maxRequestsPerCompany: config.max_requests_per_company,
+  // Where frozen reports are kept so a restart does not kill a builder's link. Omitted, they
+  // live only in memory and a restart answers every link the way a typo does.
+  reportsDir: config.reports_dir,
   graderCommit: graderCommit(),
   companies: declared.map(c => ({
     // A placeholder until the port is known. setOrigins below replaces it, and the

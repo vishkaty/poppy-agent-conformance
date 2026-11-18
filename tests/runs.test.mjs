@@ -9,6 +9,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createRig } from "../rig.mjs";
 import { discoveryFor } from "../discovery.mjs";
+import { join } from "node:path";
 
 const COMPANIES = () => [
   { origin: "http://127.0.0.1", apiOperations: [{ method: "GET", template: "/v1/orders" }] },
@@ -563,5 +564,67 @@ test("a deployment that refuses the authors own traffic grades nobody", async ()
     const body = await res.json();
     assert.equal(body.error, "grader_control_failed");
     assert.match(body.rule, /^canary\.refused$|^session\./, `fired on ${body.rule}`);
+  } finally { await r.close(); }
+});
+
+test("a frozen report survives a restart, and its file names the hash and not the token", async () => {
+  // Reports live in memory, so a restart made every builder's link answer exactly what a typo
+  // answers. /grader/health lets them tell the two apart, which is the least that could be
+  // done; this is the rest of it. A builder was told the link is theirs to keep.
+  const { mkdtempSync, readdirSync, readFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const dir = mkdtempSync(join(tmpdir(), "poppy-reports-"));
+
+  let token;
+  const first = await rig({ reportsDir: dir });
+  try {
+    const run = await (await fetch(`${first.base}/grader/runs`, { method: "POST" })).json();
+    token = run.token;
+    await fetch(`${first.base}/v1/orders`);
+    await fetch(`${first.base}/grader/runs/${token}/end`, { method: "POST" });
+  } finally { await first.r.close(); }
+
+  // the file is named by the hash of the token, so a directory listing hands nobody a report,
+  // and the token is not inside it either
+  const files = readdirSync(dir);
+  assert.equal(files.length, 1, `wrote ${files.length} files`);
+  assert.ok(!files[0].includes(token), "the file is named after the token");
+  assert.match(files[0], /^[0-9a-f]{64}\.json$/, `file was named ${files[0]}`);
+  const raw = readFileSync(join(dir, files[0]), "utf8");
+  assert.ok(!raw.includes(token), "the stored report contains its own token");
+
+  // a different process, same directory
+  const second = await rig({ reportsDir: dir });
+  try {
+    const res = await fetch(`${second.base}/grader/report/${token}.json`);
+    assert.equal(res.status, 200, `a frozen report did not survive a restart: ${res.status}`);
+    const rep = await res.json();
+    assert.equal(rep.run.frozen, true);
+    assert.equal(rep.requests.length, 1);
+
+    const html = await fetch(`${second.base}/grader/report/${token}`);
+    assert.equal(html.status, 200);
+    assert.match(await html.text(), /What your agent put on the wire/);
+
+    // and a wrong token is still exactly an unknown path
+    const wrong = token.slice(0, -1) + (token.at(-1) === "A" ? "B" : "A");
+    const a = await fetch(`${second.base}/grader/report/${wrong}`);
+    const b = await fetch(`${second.base}/grader/nothing-here`);
+    assert.equal(a.status, 404);
+    assert.equal(await a.text(), await b.text());
+  } finally { await second.r.close(); }
+});
+
+test("a report older than the retention window is gone, from disk too", async () => {
+  const { mkdtempSync, readdirSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const dir = mkdtempSync(join(tmpdir(), "poppy-retention-"));
+  // a report stored long ago, named as the grader names them
+  writeFileSync(join(dir, `${"a".repeat(64)}.json`),
+                JSON.stringify({ storedAt: 1, json: { run: {} }, html: "<p>old</p>" }));
+  const { r, base } = await rig({ reportsDir: dir, retentionSeconds: 10 });
+  try {
+    await fetch(`${base}/grader/health`);          // any control request sweeps
+    assert.deepEqual(readdirSync(dir), [], "an expired report was left on disk");
   } finally { await r.close(); }
 });

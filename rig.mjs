@@ -15,6 +15,8 @@ import { createGrader } from "./server.mjs";
 import { buildReport, renderHtml } from "./report.mjs";
 import { CHECKS, PAIRWISE } from "./checks.mjs";
 import { randomBytes, createHash } from "node:crypto";
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync } from "node:fs";
+import { join } from "node:path";
 
 export const CONTROL_PREFIX = "/grader/";
 const LEASE_SECONDS = 15 * 60;
@@ -171,6 +173,15 @@ export function createRig(cfg = {}) {
   // overrides it to put a hostname in front of the wrong listener on purpose.
   let canaryPublicBase = null;
 
+  // Frozen reports on disk, when a deployment asks for it.
+  //
+  // They are in memory otherwise, so a restart answered every builder's link with exactly what
+  // a typo answers. /grader/health lets them tell those apart, which is the least that could be
+  // done; this is the rest. The file is named by the HASH of the token, so a directory listing
+  // hands nobody a report, and the token is not inside the file either.
+  const reportsDir = cfg.reportsDir ?? null;
+  const reportPath = (runId) => join(reportsDir, `${runId}.json`);
+
   const runs = new Map();                 // sha256(token) -> run. The raw token is never stored.
   let active = null;                      // the run holding the lease, at most one
   let granting = false;                   // a second POST while the canary runs gets 409, not a second lease
@@ -250,6 +261,16 @@ export function createRig(cfg = {}) {
     run.stored = json;
     run.html = renderHtml(json);
     run.storedAt = now();
+    if (reportsDir) {
+      try {
+        mkdirSync(reportsDir, { recursive: true });
+        writeFileSync(reportPath(run.id), JSON.stringify({ storedAt: run.storedAt, json, html: run.html }));
+      } catch (err) {
+        // A report that could not be written is not a reason to lose the one in memory, and the
+        // builder still has their link until this process stops.
+        warnOnce(`could not write the frozen report: ${err.message}`);
+      }
+    }
     if (active === run) active = null;
     // Drop the records of EARLIER runs and keep this run's own.
     //
@@ -265,9 +286,32 @@ export function createRig(cfg = {}) {
     }
   }
 
+  const warned = new Set();
+  const warnOnce = (msg) => { if (!warned.has(msg)) { warned.add(msg); console.error(msg); } };
+
   function sweep() {
     const cutoff = now() - retentionSeconds;
     for (const [id, run] of runs) if (run.frozen && run.storedAt <= cutoff) runs.delete(id);
+    if (!reportsDir) return;
+    try {
+      for (const name of readdirSync(reportsDir)) {
+        if (!/^[0-9a-f]{64}\.json$/.test(name)) continue;
+        try {
+          const saved = JSON.parse(readFileSync(join(reportsDir, name), "utf8"));
+          if ((saved.storedAt ?? 0) <= cutoff) rmSync(join(reportsDir, name), { force: true });
+        } catch { rmSync(join(reportsDir, name), { force: true }); }   // unreadable is expired
+      }
+    } catch { /* the directory may not exist yet */ }
+  }
+
+  // A frozen report this process did not build, from a process that did.
+  function fromDisk(runId) {
+    if (!reportsDir) return null;
+    try {
+      const saved = JSON.parse(readFileSync(reportPath(runId), "utf8"));
+      if (!saved?.json || (saved.storedAt ?? 0) <= now() - retentionSeconds) return null;
+      return { id: runId, frozen: true, storedAt: saved.storedAt, stored: saved.json, html: saved.html };
+    } catch { return null; }
   }
 
   // One 404 for a wrong token and for an unknown path, same bytes and same headers, so the
@@ -433,7 +477,7 @@ export function createRig(cfg = {}) {
 
     const rep = path.match(/^\/grader\/report\/([A-Za-z0-9_-]{22})(\.json)?$/);
     if (rep && (m === "GET" || m === "HEAD")) {
-      const run = runs.get(sha(rep[1]));
+      const run = runs.get(sha(rep[1])) ?? fromDisk(sha(rep[1]));
       if (!run) { notFound(res); return true; }
       const body = run.frozen ? run.stored : reportOf(run);
       if (rep[2]) { json(res, 200, body); return true; }

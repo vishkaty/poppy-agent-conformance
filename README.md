@@ -25,8 +25,11 @@ It does not detect a User ID derived from personal information. Spec 5.1 forbids
 one even with a keyed hash, and the guides allow an HMAC of an internal id with the Company
 identifier. A Company cannot tell those apart on the wire, so no check here claims to.
 
-It does not verify a delegation against the signing key published at the agent jwks_uri.
-That needs the key set, which the recorder fetches; the check is not written yet.
+It does not verify a delegation against the signing key published at the agent `jwks_uri`.
+Nothing in this grader fetches anything: the only outbound requests it makes are the canary legs
+that gate a run. So a delegation is taken at its word, and the `client_id` a Session JWT names is
+attested only by that delegation. This is the largest gap here and it is being closed; until it
+is, 5.3 step 1 is not performed.
 
 ## Three verdicts, and why
 
@@ -194,6 +197,12 @@ Nothing is retained that does not belong to a live run. A request before your le
 after your run is frozen, is examined by no rule, and the report says how many there were
 rather than leaving the absence to read as conformance. The same goes for a run that sends
 more than the per-run limit: counted, and stated.
+
+Set `reports_dir` and a frozen report survives a restart: it is written under the sha256 of its
+token, so a directory listing hands nobody a report and the token is not in the file either.
+Without it the reports live in memory, and a restart answers every builder's link with exactly
+what a typed-wrong link answers, which is why `/grader/health` names the process and its start
+time.
 
 The report link is the only credential. It is 128 bits, it is not stored (the run is keyed
 by its hash), it is never written to any console stream, and the page does not contain it,
@@ -462,7 +471,7 @@ than a citation.
 
 Early, and honest about what has been measured.
 
-Twenty five rules, and fifty four mutations that each break one guard and require a named test
+Twenty five rules, and fifty six mutations that each break one guard and require a named test
 to notice. The test count is deliberately not quoted here: it went stale twice in one day, and
 `npm test` prints it. It has been run against synthetic traffic, against traffic minted by the
 authors own signing code, and end to end through a tunnel at a real hostname on 443, where a

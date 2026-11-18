@@ -90,7 +90,7 @@ test("the README states the real number of mutations", async () => {
   const { MUTATIONS } = await import("../tools/killtest.mjs");
   const readme = readFileSync(join(HERE, "../README.md"), "utf8");
   const words = { 31: "thirty one", 40: "forty", 43: "forty three", 44: "forty four",
-                  45: "forty five", 50: "fifty", 53: "fifty three", 54: "fifty four", 55: "fifty five",
+                  45: "forty five", 50: "fifty", 53: "fifty three", 54: "fifty four", 55: "fifty five", 56: "fifty six", 57: "fifty seven",
                   50: "fifty" };
   const n = MUTATIONS.length;
   assert.ok(readme.toLowerCase().includes(`${words[n] ?? n} mutations`)

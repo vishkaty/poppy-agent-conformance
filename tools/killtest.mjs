@@ -114,6 +114,14 @@ export const MUTATIONS = [
     kills: "refuses to grade when its own conforming traffic is answered with an error",
     find: "  for (const leg of legs ?? []) if (!(leg.status >= 200 && leg.status < 300)) return leg;", to: "" },
 
+  { id: "retention/disk-not-swept", file: "rig.mjs", tests: "tests/runs.test.mjs",
+    kills: "older than the retention window is gone, from disk too",
+    find: "          if ((saved.storedAt ?? 0) <= cutoff) rmSync(join(reportsDir, name), { force: true });", to: "" },
+  { id: "restart/no-disk-read", file: "rig.mjs", tests: "tests/runs.test.mjs",
+    kills: "survives a restart",
+    find: "      const run = runs.get(sha(rep[1])) ?? fromDisk(sha(rep[1]));",
+    to: "      const run = runs.get(sha(rep[1]));" },
+
   // the two disclosures that cannot be gated: our own clock, and our own refusal
   { id: "report/hides-stop", file: "report.mjs", tests: "tests/report.test.mjs",
     kills: "the report says so instead of blaming the agent",
