@@ -299,6 +299,35 @@ Writing that control is what caught the argument order. Their signature is
 `validateSchema(schema, value, refs)`, ours was reversed, and validating the schema against
 the document produced no errors and read as a pass.
 
+## Run their validator against this grader
+
+The strongest control available is not a fixture at all. The authors published kit validates a
+Company by acting as a Personal Agent, and it sends deliberately broken Session JWTs to see
+whether the Company rejects them. Pointing it at this grader therefore does two things at once:
+it judges this Company, and its probes become an adversarial agent written by the people who
+wrote the specification.
+
+```sh
+# in the kit folder, with the grader running on a public hostname at 443
+node validate/index.ts keygen --base-url https://<your-grader>/test-agent
+node validate/index.ts survey https://<your-grader>
+node validate/index.ts check  https://<your-grader> --probe https://<your-grader>/poppy/orders
+```
+
+Their test agent only works past discovery if its `agent.json` and `jwks.json` are reachable,
+so a deployment can host them with `test_agent_identity` pointing at their `.poppy/` folder.
+Exactly those two files are served, by name: `keygen` writes the signing key into the same
+folder, and a test asserts by name that it is never served.
+
+Doing that found three things this project own tests could not. Two interfaces were advertised
+and not served, which is a dead end an agent reaches by following our own document. Four
+failures named every request in the run rather than the ones that breached, because the check
+had dropped the request while iterating the delegations. And a method mismatch on a real
+destination answered 404, telling an agent its endpoint was wrong when it was not.
+
+In the other direction, our rules caught every breach their validator sent: thirteen failures,
+each matching one of its probes, and no conforming request failed.
+
 ## The copy of the specification in spec/
 
 Published 1.0, frozen by the authors on 2026-11-14, captured from their repository at one
@@ -313,9 +342,24 @@ than a citation.
 
 ## Status
 
-Early. Twenty four checks and 116 tests. It has been run against synthetic traffic and against a
-Company of our own on two public hostnames. It has not yet been run against a third party
-agent, and no verdict about anyone else software has been published from it.
+Early, and honest about what has been measured.
+
+Twenty four rules, 161 tests, and 22 mutations that each break one guard and require a named
+test to notice. It has been run against synthetic traffic, against traffic minted by the
+authors own signing code, and end to end through a tunnel at a real hostname on 443, where a
+conforming agent reached 23 of the 24 rules and failed none. The one rule it did not reach is
+`session.ath`, which needs an access token this grader does not issue.
+
+It has been run against one third party agent: the authors own kit validator, acting as a
+Personal Agent. Every breach it deliberately sent was caught. No verdict about anyone else
+software has been published from it, and none will be: a report goes to the builder who
+leased the run and nowhere else.
+
+What this grader does NOT do, stated plainly because the absence is the thing that misleads:
+it does not verify a delegation signature against the key at the agent jwks_uri, it cannot
+tell a hashed User ID from a random one, and it records and judges rather than rejecting, so
+a request that breaks a rule still gets the ordinary answer and the verdict arrives in the
+report. A Company that rejects what it judges is the next thing to build.
 
 If you build a Personal Agent and want it graded, open an issue. Reports go to the builder,
 not to the public.
