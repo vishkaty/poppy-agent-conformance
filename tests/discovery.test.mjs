@@ -58,3 +58,53 @@ test("the schema is strict enough to catch the two defects that caught us before
   assert.notDeepEqual(formatSchemaErrors(validateSchema(SCHEMA, noDescription, REFS)), [],
     "their schema did not catch a protocol entry with no description");
 });
+
+// The two documents a conforming agent fetches BEFORE it will use poppy.json at all.
+//
+// 3.2: "Before using a Company's poppy.json, the Personal Agent fetches the metadata and
+// MUST check that its issuer exactly matches the issuer it found, character for character.
+// It MUST also check that protected_resources includes https://{organization.domain}."
+//
+// Our Company declared auth.issuer and answered 404 to both, so a conforming agent would
+// have refused the document and sent no Session JWT at all. The grader would have recorded
+// nothing and reported every rule as not reached, which reads as the builder's fault.
+import { resourceMetadataFor, authServerMetadataFor } from "../discovery.mjs";
+
+test("the domain's protected resource metadata names the domain exactly", () => {
+  const m = resourceMetadataFor("https://shop.example");
+  assert.equal(m.resource, "https://shop.example",
+    "3.2: its resource MUST be exactly https://{organization.domain}, with no path or trailing slash");
+  assert.deepEqual(m.authorization_servers, ["https://shop.example/poppy"],
+    "and its authorization_servers, when nonempty, names the issuer");
+});
+
+test("it carries the port when the host has one, like the domain does", () => {
+  const m = resourceMetadataFor("https://shop.example:8443");
+  assert.equal(m.resource, "https://shop.example:8443");
+});
+
+test("the issuer metadata matches the issuer character for character", () => {
+  const m = authServerMetadataFor("https://shop.example");
+  assert.equal(m.issuer, "https://shop.example/poppy");
+});
+
+test("the issuer metadata lists the domain in protected_resources with no trailing slash", () => {
+  // The guides call this "the required field an existing issuer is most likely to be
+  // missing", so a grader that omitted it would be modelling the common defect rather than
+  // the rule.
+  const m = authServerMetadataFor("https://shop.example");
+  assert.ok(m.protected_resources.includes("https://shop.example"),
+    `protected_resources is ${JSON.stringify(m.protected_resources)}`);
+  for (const r of m.protected_resources)
+    assert.ok(!r.endsWith("/") && !new URL(r).pathname.replace(/^\//, ""),
+      `${r} has a path or trailing slash, which 3.2 forbids`);
+});
+
+test("the issuer metadata declares no sign-in grant, because this grader offers none", () => {
+  // 3.2 ties the offered sign-in types to grant_types_supported, so advertising a grant we
+  // do not implement would make the grader itself nonconformant and send a builder's agent
+  // down a path that cannot complete.
+  const m = authServerMetadataFor("https://shop.example");
+  assert.ok(!m.grant_types_supported.includes("authorization_code"));
+  assert.ok(!m.grant_types_supported.includes("urn:ietf:params:oauth:grant-type:device_code"));
+});

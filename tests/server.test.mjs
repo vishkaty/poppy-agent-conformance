@@ -188,3 +188,24 @@ test("a normal target is not refused", async () => {
     assert.notEqual(g.records.at(-1).refused, true);
   });
 });
+
+test("the three documents agree after the origin is known", async () => {
+  // 3.2 makes the agent check that the issuer metadata's issuer matches poppy.json's
+  // "character for character" and refuse the document otherwise. A discovery snapshot taken
+  // before the public origin was known disagreed with the metadata computed from it, so a
+  // conforming agent would refuse the grader and the grader would record nothing, reporting
+  // every rule as not reached. That reads as the builder's fault.
+  await withGrader(async (g, port) => {
+    const origin = `http://127.0.0.1:${port}`;
+    const j = async p => (await fetch(origin + p)).json();
+    const doc = await j("/.well-known/poppy.json");
+    const prm = await j("/.well-known/oauth-protected-resource");
+    const asm = await j("/.well-known/oauth-authorization-server/poppy");
+    const host = new URL(origin).host;
+    assert.equal(asm.issuer, doc.auth.issuer, "the issuer metadata must match poppy.json character for character");
+    assert.ok(asm.protected_resources.includes(`${new URL(origin).protocol}//${host}`),
+      `protected_resources ${JSON.stringify(asm.protected_resources)} does not name the domain`);
+    assert.equal(prm.resource, `${new URL(origin).protocol}//${host}`);
+    assert.equal(doc.organization.domain, host, "3.1: domain is the host that serves the document, with its port");
+  }, { discovery: undefined });
+});

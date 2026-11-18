@@ -7,6 +7,7 @@
 import { createServer } from "node:http";
 import { createHash } from "node:crypto";
 import { recordOf, classify, pathOf } from "./record.mjs";
+import { resourceMetadataFor, authServerMetadataFor, authServerMetadataPath, discoveryFor } from "./discovery.mjs";
 
 const DEFAULT_MAX_BODY = 256 * 1024;
 
@@ -43,7 +44,18 @@ export function validateConfig(cfg) {
 }
 
 export function createGrader(cfg) {
-  let config = { ...cfg };
+  // The discovery document is DERIVED from the current origin, never stored as a snapshot.
+  // A snapshot taken before the public origin was known disagreed with the metadata built
+  // from it, and 3.2 makes an agent refuse a Company whose issuer metadata does not match
+  // its poppy.json character for character. Pass a function to override, or an object to
+  // pin one deliberately.
+  // Always from the ORIGINAL cfg. Reading the derived value back meant the second call
+  // returned its own stale output, so setOrigin left poppy.json naming an issuer the
+  // metadata did not, which is precisely the 3.2 mismatch that makes an agent refuse a
+  // Company. The test asserting the three documents agree is what caught it.
+  const derive = (origin) => (typeof cfg.discovery === "function" ? cfg.discovery(origin)
+                             : cfg.discovery ?? discoveryFor(origin));
+  let config = { ...cfg, discovery: derive(cfg.origin) };
   const warnings = validateConfig(config);
   const records = [];
   const maxBody = config.maxBodyBytes ?? DEFAULT_MAX_BODY;
@@ -120,9 +132,18 @@ export function createGrader(cfg) {
     const send = () => {
       if (record.rejected) return;
       if (record.misdirected) { res.writeHead(421).end(); return; }      // RFC 9110 15.5.20
-      if (record.mustNotCarry && record.path === "/.well-known/poppy.json") {
+      // The three documents a conforming agent fetches before it will use the Company at
+      // all. 3.2 makes the agent refuse poppy.json unless the issuer metadata matches and
+      // protected_resources names the domain, so a grader that 404s these records nothing
+      // and reports every rule as not reached, which reads as the builder's fault.
+      const docs = {
+        "/.well-known/poppy.json": () => config.discovery,
+        "/.well-known/oauth-protected-resource": () => resourceMetadataFor(config.origin),
+        [authServerMetadataPath(config.origin)]: () => authServerMetadataFor(config.origin),
+      };
+      if (docs[record.path]) {
         res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
-        res.end(JSON.stringify(config.discovery));
+        res.end(JSON.stringify(docs[record.path]()));
         return;
       }
       res.writeHead(record.isResource ? 200 : 404, { "content-type": "application/json" });
@@ -136,7 +157,11 @@ export function createGrader(cfg) {
     // The configured origin must be the one actually served, or every htu comparison is
     // wrong for our deployment and not for the agent. Used by tests on an ephemeral port
     // and by the rig once the public hostname is known.
-    setOrigin(origin) { config = { ...config, origin }; validateConfig(config); },
+    setOrigin(origin) {
+      // Re-derive, unless an object was pinned on purpose, or the documents go stale.
+      config = { ...config, origin, discovery: derive(origin) };
+      validateConfig(config);
+    },
     get config() { return config; },
     listen(port = 0) {
       return new Promise(r => server.listen(port, "127.0.0.1", () => r(server.address().port)));

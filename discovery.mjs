@@ -14,6 +14,7 @@ export function discoveryFor(origin, { name = "Grader Shop", withExtensions = tr
   // port when that isn't 443." URL.host is exactly that: it carries a non-default port and
   // omits 443.
   const domain = u.host;
+  void domain;
   const issuer = `${origin}/poppy`;
   return {
     protocol_version: "1.0",
@@ -41,4 +42,54 @@ export function discoveryFor(origin, { name = "Grader Shop", withExtensions = tr
       ? { extensions: { operations: [{ version: "3", endpoint: `${origin}/poppy/operations` }] } }
       : {}),
   };
+}
+
+// The domain's protected resource metadata, RFC 9728, at /.well-known/oauth-protected-resource.
+//
+// 3.2: "its `resource` MUST be exactly `https://{organization.domain}`, and its
+// `authorization_servers`, when nonempty, names the issuer". An earlier Company of ours
+// served the MCP server's metadata at this path instead, with a resource of
+// `.../poppy/mcp`, and the authors' validator caught it.
+export function resourceMetadataFor(origin) {
+  const u = new URL(origin);
+  return {
+    // The scheme comes from the origin. Production is https, which the authors' validator
+    // enforces; a loopback rig on http must still be self-consistent or its own documents
+    // disagree and the agent refuses it for our reason rather than its own.
+    resource: `${u.protocol}//${u.host}`,
+    authorization_servers: [`${origin}/poppy`],
+  };
+}
+
+// The issuer's OAuth Authorization Server Metadata, RFC 8414, at the URL RFC 8414 section
+// 3.1 defines: /.well-known/oauth-authorization-server with the issuer's path appended.
+//
+// 3.2 requires `protected_resources` to list `https://{domain}` "for every domain whose
+// issuer it is, with no path or trailing slash". The guides call it "the required field an
+// existing issuer is most likely to be missing", so getting it right here is the point.
+//
+// grant_types_supported deliberately offers no sign-in: 3.2 ties the offered sign-in types
+// to this list, and advertising a grant this grader does not implement would make the
+// grader nonconformant and send a builder's agent down a path that cannot complete. 3.2
+// allows it: "A Company without one can offer signed-out Sessions, including APIs,
+// conversations, feedback, and browser join, without running an authorization server",
+// and we keep the issuer so that `aud` is an issuer, which is the case builders will meet.
+export function authServerMetadataFor(origin) {
+  const issuer = `${origin}/poppy`;
+  return {
+    issuer,
+    protected_resources: [`${new URL(origin).protocol}//${new URL(origin).host}`],
+    token_endpoint: `${issuer}/token`,
+    revocation_endpoint: `${issuer}/revoke`,
+    grant_types_supported: ["refresh_token"],
+    token_endpoint_auth_methods_supported: ["private_key_jwt"],
+    token_endpoint_auth_signing_alg_values_supported: ["ES256", "PS384"],
+  };
+}
+
+// The path RFC 8414 section 3.1 defines for an issuer with a path: the well-known segment
+// goes between the host and the issuer's path, which is why it is not simply appended.
+export function authServerMetadataPath(origin) {
+  const p = new URL(`${origin}/poppy`).pathname.replace(/\/+$/, "");
+  return `/.well-known/oauth-authorization-server${p}`;
 }
