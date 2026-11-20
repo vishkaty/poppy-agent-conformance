@@ -86,6 +86,21 @@ export function validateConfig(cfg) {
   return warnings;
 }
 
+// Why verification produced no key set, in the words of whatever failed. One sentence used to
+// cover four situations and told every one of them to lease a run. Three of those already had
+// one: a Session JWT with no `iss`, a fetch that got no bytes, and a fetch whose answer was the
+// agent's own defect. A builder given the wrong remedy leases again and meets the same refusal,
+// which is what the first run against a third-party agent SDK did. checks.mjs already holds the
+// rule this follows: an abstention is never just silence.
+function whyNotVerified(verifying, record) {
+  if (!verifying)
+    return "lease a run first with POST /grader/runs, because this Company fetches an agent's key set only while a run is open";
+  const k = record.issuerKeys;
+  if (!k)
+    return "the Session JWT carried no `iss`, so there was no client_id whose key set to fetch";
+  return k.detail || `the fetch of the agent's key set ended as ${k.outcome}`;
+}
+
 export function createGrader(cfg) {
   // The discovery document is DERIVED from the current origin, never stored as a snapshot.
   // A snapshot taken before the public origin was known disagreed with the metadata built
@@ -367,7 +382,8 @@ export function createGrader(cfg) {
       // who could reach the hostname: the egress exposure was accepted on the premise that it
       // was the lease holder's doing, and without this it was not. It also made one bare
       // request enough to poison the resolver for the next gate, which was measured.
-      if (issuerKeys && (config.verifyWhen?.() ?? true)) {
+      const verifying = !!issuerKeys && (config.verifyWhen?.() ?? true);
+      if (verifying) {
         const jwt = decodeJwt(record.headers?.["poppy-session"]);
         const iss = jwt?.payload?.iss;
         if (typeof iss === "string" && iss) {
@@ -413,7 +429,8 @@ export function createGrader(cfg) {
         // attributing them to an unproven client.
         if (issuerKeys && record.issuerKeys?.outcome !== "ok") {
           answer(res, record, 400, { error: "invalid_session",
-            error_description: "this Company verifies a delegation against the key the agent publishes before it keeps conversation state (5.3), and it could not verify this one: lease a run first with POST /grader/runs" });
+            error_description: "this Company verifies a delegation against the key the agent publishes before it keeps conversation state (5.3), and it could not verify this one: "
+              + whyNotVerified(verifying, record) });
           return;
         }
         let body;

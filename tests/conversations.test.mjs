@@ -401,3 +401,34 @@ test("the same Company serves conversations once verification has run", async ()
     assert.equal(made.status, 201, made.text);
   } finally { await g.close(); }
 });
+
+test("inside a run, the refusal says why verification failed and does not tell the builder to lease one", async () => {
+  // Found by the first run against a third-party agent SDK, which held a lease and was told
+  // "lease a run first with POST /grader/runs" because its client_id host does not resolve.
+  // One sentence covered four situations: no lease, a Session JWT with no `iss`, a fetch that
+  // got no bytes, and a fetch whose answer was the agent's own defect. In three of them the
+  // advice is wrong, and a builder who follows it re-leases and sees the same refusal. The
+  // report already names the real reason, and this is the same honesty on the wire: the
+  // abstention in checks.mjs is never just silence, so neither is the refusal.
+  const detail = "could not resolve agent.example: getaddrinfo ENOTFOUND agent.example";
+  const g = createGrader({ origin: "http://127.0.0.1", discovery: discoveryFor,
+                           operations: [{ method: "GET", path: "/poppy/orders" }],
+                           verifyDelegations: true,
+                           // a run IS open, and the fetch ran and got no bytes
+                           verifyWhen: () => true,
+                           issuerKeys: { forIssuer: async () => ({ outcome: "grader", detail, keys: [], kids: [] }),
+                                         newRun() {}, forget() {} } });
+  const port = await g.listen(0);
+  g.setOrigin(`http://127.0.0.1:${port}`);
+  try {
+    const a = await agent(g.config.origin);
+    const made = await a.call("POST", a.endpoint, { id: "r1", message: { text: "hello" } });
+    assert.equal(made.status, 400, `a conversation was created on unverified claims: ${made.text}`);
+    assert.equal(made.body?.error, "invalid_session");
+    const why = made.body?.error_description ?? "";
+    assert.doesNotMatch(why, /lease a run/i,
+      `the builder holds a lease and was told to get one: ${why}`);
+    assert.ok(why.includes(detail),
+      `the refusal does not say why verification failed, so the builder cannot act on it: ${why}`);
+  } finally { await g.close(); }
+});

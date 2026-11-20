@@ -117,7 +117,7 @@ export const MUTATIONS = [
   // what an adversarial review of the live deployment found, each reproduced before fixing
   { id: "live/fetch-without-lease", file: "server.mjs", tests: "tests/runs.test.mjs",
     kills: "nothing is fetched while no run is open",
-    find: "      if (issuerKeys && (config.verifyWhen?.() ?? true)) {", to: "      if (issuerKeys) {" },
+    find: "const verifying = !!issuerKeys && (config.verifyWhen?.() ?? true);", to: "const verifying = !!issuerKeys;" },
   { id: "live/canary-issuer-remembered", file: "rig.mjs", tests: "tests/runs.test.mjs",
     kills: "one request cannot deny every later lease",
     find: "    for (const g of graders) g.issuerKeys?.forget?.(g.canaryClientId);", to: "" },
@@ -327,6 +327,14 @@ export const MUTATIONS = [
     find: "record.seq = ++seq;", to: "record.seq = 0;" },
   { id: "record/prefix-collision-allowed", file: "server.mjs", kills: "under the control-plane prefix is refused",
     find: "if (prefix && x.origin === parsed.origin && x.pathname.startsWith(prefix))", to: "if (false)" },
+  // The refusal a builder reads when a delegation could not be verified. Found by the first run
+  // against a third-party agent SDK, which held a lease and was told to go and get one.
+  { id: "refusal/always-says-lease", file: "server.mjs", tests: "tests/conversations.test.mjs", kills: "does not tell the builder to lease one",
+    find: "  if (!verifying)\n    return \"lease", to: "  if (true)\n    return \"lease" },
+  { id: "refusal/no-reason", file: "server.mjs", tests: "tests/conversations.test.mjs", kills: "says why verification failed",
+    find: "return k.detail || ", to: "return \"\" || " },
+  { id: "refusal/verifying-always-false", file: "server.mjs", tests: "tests/conversations.test.mjs", kills: "does not tell the builder to lease one",
+    find: "const verifying = !!issuerKeys && (config.verifyWhen?.() ?? true);", to: "const verifying = false;" },
 ];
 
 // Imported for its MUTATIONS list by a test that owns the count in the README. Everything
