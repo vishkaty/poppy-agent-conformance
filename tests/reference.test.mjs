@@ -140,3 +140,27 @@ test("our RFC 7638 thumbprint agrees with theirs", async () => {
       "our thumbprint differs from the authors' implementation");
   }
 });
+
+test("the README and the provenance record do not disagree about the archive measurement", () => {
+  // One fact, two files, and they drifted: the README said the recorded archive hash differs
+  // from a download on one date while the provenance note named another, so a reader checking
+  // the claim would download the wrong day's archive and could not reproduce either sentence.
+  // The measurement is also required to be self-evidencing: "differs" is only a statement if
+  // the hash it was compared against is written down next to the one it differs from.
+  const prov = JSON.parse(readFileSync(join(HERE, "../reference/PROVENANCE.json"), "utf8"));
+  const readme = readFileSync(join(HERE, "../README.md"), "utf8").replace(/\s+/g, " ");
+
+  const inNote = /downloaded on (\d{4}-\d{2}-\d{2})/.exec(prov.kit_zip_sha256_note);
+  assert.ok(inNote, "the provenance note no longer dates the archive it compared against");
+  const inReadme = /differs from the archive downloaded on (\d{4}-\d{2}-\d{2})/.exec(readme);
+  assert.ok(inReadme, "the README no longer states the archive comparison this test protects");
+  assert.equal(inReadme[1], inNote[1],
+    "the README and the provenance note name different downloads for the same measurement");
+
+  const cmp = prov.kit_zip_sha256_compared;
+  assert.ok(cmp?.downloaded && cmp?.sha256,
+    "the provenance records no hash for the archive it says the recorded one differs from");
+  assert.equal(cmp.downloaded, inNote[1], "the recorded comparison is dated differently from the note");
+  assert.notEqual(cmp.sha256, prov.kit_zip_sha256_downloaded_once,
+    "the two archive hashes are equal, so the claim that they differ is false");
+});

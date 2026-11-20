@@ -22,6 +22,11 @@
       "sha256": "3b4ade4931b77ca6a511c28f98eb03762122f1878b62982b6b0e1bb595d86142"
     }
   },
-  "kit_zip_sha256_note": "The archive hash is not the identity of what this grader depends on. It covers the whole kit, which changes when any of its ninety files changes, while the oracle here is three of them. So a report cites a digest of those three, read from disk when the report is built: it is stable while they are, it changes the moment one is edited, and it says nothing about the rest of the kit. Measured 2026-11-20: the zip recorded below hashed differently from the zip downloaded on 2026-11-18, while the three vendored files were byte-identical in both.",
-  "kit_zip_sha256_downloaded_once": "b9941ebea0646a2e774362b6332253a9f7cbbe2fd9d8914b188e09f8d4e418e3"
+  "kit_zip_sha256_note": "The archive hash is not the identity of what this grader depends on. It covers the whole kit, which changes when any of its ninety files changes, while the oracle here is three of them. So a report cites a digest of those three, read from disk when the report is built: it is stable while they are, it changes the moment one is edited, and it says nothing about the rest of the kit. Measured 2026-11-20: the zip recorded below, retrieved 2026-11-17, hashed differently from the zip downloaded on 2026-11-20, while the three vendored files were byte-identical in both. The hash it was compared against is recorded beside it, so the comparison can be repeated rather than taken on trust.",
+  "kit_zip_sha256_downloaded_once": "b9941ebea0646a2e774362b6332253a9f7cbbe2fd9d8914b188e09f8d4e418e3",
+  "kit_zip_sha256_compared": {
+    "downloaded": "2026-11-20",
+    "sha256": "bf61ff9629a5521e40630bf9192eb2aa7251ee63ff8028273cefe068072d08a4",
+    "the_three_vendored_files": "byte-identical to the recorded hashes above in this download"
+  }
 }
