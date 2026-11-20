@@ -504,8 +504,11 @@ here rather than resolved by changing our answer. 3.2 says a Company that sets `
 and has never issued a refresh token "answers every refresh with `invalid_grant`... It MAY do
 so without verifying the client assertion". This Company is in that state and answers exactly
 that. Their client assertion checks treat `invalid_grant` as proof the assertion was accepted,
-and so report five MUST failures at the token endpoint. We follow the sentence. The remaining
-disagreement in their report, beyond the conversation routes, is those five.
+and so report five MUST failures at the token endpoint. We follow the sentence. Those five are
+the whole of it. The same answer also costs `assertion.jti-reuse`, which is a SHOULD and so
+reports as the one warning, and nothing outside the token endpoint fails: in the run of
+2026-11-20 their report was ninety three passed, five failed, one warning and thirty four
+skipped, and all six of the failures and the warning are `assertion.` checks.
 
 ## Keeping up with the specification
 
@@ -548,9 +551,14 @@ Early, and honest about what has been measured.
 Twenty seven rules, and ninety mutations that each break one guard and require a named test
 to notice. The test count is deliberately not quoted here: it went stale twice in one day, and
 `npm test` prints it. It has been run against synthetic traffic, against traffic minted by the
-authors own signing code, and end to end through a tunnel at a real hostname on 443, where a
-conforming agent reached 23 of the 24 rules and failed none. The one rule it did not reach is
-`session.ath`, which needs an access token this grader does not issue.
+authors own signing code, and end to end through a tunnel at a real hostname on 443. That last
+one is not a past event. Every lease is preceded by a control in which this grader drives
+itself with the authors own signing code, including one leg through the public hostname, and
+refuses to grade at all unless every rule that control exercises passes. On a deployment that
+verifies delegations, which the live one does, the control covers twenty six of the twenty
+seven rules. The one it cannot exercise is `session.ath`: this grader issues no access tokens,
+so a conforming agent sends no `ath` here, and the rule is judged only for a builder who points
+a signed-in code path at it with a token of their own.
 
 It has been run against one third party agent: the authors own kit validator, acting as a
 Personal Agent. Every breach it deliberately sent was caught. No verdict about anyone else

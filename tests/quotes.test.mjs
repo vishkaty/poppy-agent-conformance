@@ -119,3 +119,20 @@ test("the README states the real number of checks", () => {
   assert.ok(readme.includes(`${cap(spell(CHECKS.length))} need one Company`),
     `the README does not say "${cap(spell(CHECKS.length))} need one Company" for ${CHECKS.length}`);
 });
+
+test("the README states the real coverage of the control that gates every lease", async () => {
+  // The Status section said "23 of the 24 rules" after the count had moved twice, in the same
+  // paragraph that says the test count is deliberately not quoted because it went stale. A
+  // number in a public README that nobody owns drifts, and this one is the coverage claim a
+  // reader would check first. The gate's own constants own it now.
+  const { CANARY_RULES, CANARY_ABSTAINS } = await import("../rig.mjs");
+  const readme = readFileSync(join(HERE, "../README.md"), "utf8").replace(/\s+/g, " ");
+  const total = CHECKS.length + PAIRWISE.length;
+  // On a deployment that fetches the agent's documents, the rules allowed to abstain must PASS
+  // like any other, so the control covers all but the ones excluded outright.
+  const covered = CANARY_RULES.length + Object.keys(CANARY_ABSTAINS).length;
+  assert.ok(readme.includes(`${spell(covered)} of the ${spell(total)} rules`),
+    `the README does not say "${spell(covered)} of the ${spell(total)} rules" for the control's coverage`);
+  for (const id of ["session.ath"])
+    assert.ok(readme.includes(id), `the README does not name ${id}, the rule the control cannot exercise`);
+});
