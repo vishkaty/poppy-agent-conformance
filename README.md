@@ -548,7 +548,7 @@ than a citation.
 
 Early, and honest about what has been measured.
 
-Twenty seven rules, and ninety mutations that each break one guard and require a named test
+Twenty seven rules, and ninety three mutations that each break one guard and require a named test
 to notice. The test count is deliberately not quoted here: it went stale twice in one day, and
 `npm test` prints it. It has been run against synthetic traffic, against traffic minted by the
 authors own signing code, and end to end through a tunnel at a real hostname on 443. That last
@@ -560,10 +560,17 @@ seven rules. The one it cannot exercise is `session.ath`: this grader issues no 
 so a conforming agent sends no `ath` here, and the rule is judged only for a builder who points
 a signed-in code path at it with a token of their own.
 
-It has been run against one third party agent: the authors own kit validator, acting as a
-Personal Agent. Every breach it deliberately sent was caught. No verdict about anyone else
-software has been published from it, and none will be: a report goes to the builder who
-leased the run and nowhere else.
+It has been run against two agents nobody here wrote. The first is the authors own kit
+validator, acting as a Personal Agent: every breach it deliberately sent was caught. The second
+is an independent Personal Agent SDK, driven through a signed-out task at the live deployment on
+2026-11-20: of the 27 rules, 23 passed, none failed, 3 were not reached, and one could not be
+judged because the agent identity in that run did not resolve. That run is the better evidence
+of the two, because nothing in it was written to be graded, and it is also where the refusal
+text above was found to be wrong.
+
+No verdict about anyone else software has been published from it, and none will be: a report
+goes to the builder who leased the run and nowhere else. That is why the SDK is not named here.
+The run is reproducible by anyone who points any agent at a leased run of this grader.
 
 What this grader does NOT do, stated plainly because the absence is the thing that misleads: it
 cannot tell a hashed User ID from a random one, 5.1 forbids deriving one even with a keyed hash,
