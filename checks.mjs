@@ -434,10 +434,16 @@ export const CHECKS = [
     // in as many words: "The Company MUST NOT use unverified Session claims to attribute a
     // request to a Personal Agent, User, or Session, or to look up their state."
     //
-    // `kid` is matched by its member, then by RFC 7638 thumbprint, then not at all: 5.2 says
-    // `kid` "names the key" with no requirement word, and the authors' own signer omits it
-    // whenever the root key has none, which is every key its generateKey() produces. A check
-    // that failed a missing `kid` would fail their code, and reference.test.mjs would say so.
+    // `kid` is matched by its member, then by RFC 7638 thumbprint, then not at all, because
+    // 5.2 says `kid` "names the key" with no requirement word.
+    //
+    // The reason first written here was wrong and is worth recording: it said the authors' own
+    // signer omits `kid`, which is true of `generateKey()` called directly, as our own tests
+    // call it, and NOT of the kit's actual identity path. Their `keygen` sets `kid` on the root
+    // key, and their `delegation.schema.json` lists it as required. So the fallback is not
+    // needed to accept their traffic; it is kept because the normative sentence carries no
+    // requirement word and a refusal over an absent `kid` would be contestable, which is the
+    // side this grader errs on.
     //
     // The fetch itself is NOT done here. This file stays pure and synchronous, so that every
     // verdict is reproducible from a recorded log with no network, and so that enforcement can

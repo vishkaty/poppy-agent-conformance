@@ -437,13 +437,18 @@ the fixture geometry and not the rule.
 `reference/` holds three files from the authors published kit, each with its own sha256, which
 the suite verifies before using them.
 
-Not the archive's sha256, which is worth saying because it is the obvious choice and it is
-wrong. Three downloads of the kit an hour apart gave three different zip hashes over
-byte identical content, proven by digesting all 96 files of two of them: the hash changes with
-packaging. A report that cited it would make two runs of identical code appear to cite
-different oracles. So every report carries a digest of the vendored files themselves, read from
-disk when the report is built, which also means an edited oracle changes that digest instead of
-passing unnoticed.
+Not the archive's sha256, which is the obvious choice and the wrong one. It covers the whole
+kit, which changes whenever any of its ninety files changes, while the oracle here is three of
+them: a report citing the archive would appear to cite a different oracle after a change to a
+file this grader never reads. So every report carries a digest of the three vendored files
+themselves, read from disk when the report is built, which also means an edited oracle changes
+that digest instead of passing unnoticed.
+
+An earlier version of this paragraph claimed the archive hash changes between downloads of
+identical content, and said so on the strength of a file count that was wrong. What is measured
+is narrower: the archive hash recorded in `reference/PROVENANCE.json` differs from the archive
+downloaded on 2026-11-20, and the three vendored files were byte-identical in both. Whether the
+archive is reproducible for unchanged content is not something this project has established.
 
 `jose.ts` is their signing code. The suite mints conforming traffic with it and requires
 every check to pass, so if our grader failed traffic built by the people who wrote the

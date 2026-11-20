@@ -18,10 +18,10 @@ const REF_PROV = JSON.parse(readFileSync(join(HERE, "reference/PROVENANCE.json")
 
 // Which oracle judged this run, by its CONTENT.
 //
-// The obvious identifier, the sha256 of the kit archive we vendored from, is not one: three
-// downloads an hour apart gave three different zip hashes over byte-identical content, proven
-// by digesting all 96 files of two of them. A report citing that would make two runs of
-// identical code appear to cite different oracles. So this digests the vendored files
+// The obvious identifier, the sha256 of the kit archive we vendored from, is not one: it covers
+// the whole kit, which changes whenever any of its ninety files changes, while the oracle here
+// is three of them, so a report citing the archive would appear to cite a different oracle
+// after a change to a file this grader never reads. So this digests the vendored files
 // themselves, read from disk at report time, which also means an edited oracle changes the
 // identity in every report rather than passing unnoticed.
 function oracleIdentity() {

@@ -317,8 +317,11 @@ test("the vendored provenance says plainly that the zip hash is not a content id
   // Otherwise the next person to compare two kit downloads concludes the oracle changed.
   const prov = JSON.parse(readFileSync(join(HERE, "../reference/PROVENANCE.json"), "utf8"));
   const note = JSON.stringify(prov).toLowerCase();
-  assert.match(note, /not a content identifier|packaging|differs between downloads/,
-    "nothing in the provenance warns that the zip hash changes without the content changing");
+  assert.match(note, /not the identity|covers the whole kit/,
+    "the provenance does not say why the archive hash is not what a report should cite");
+  // And it must not carry the claim this project could not substantiate: that the archive hash
+  // changes between downloads of identical content. It was written on a wrong file count.
+  assert.ok(!/96 files/.test(note), "the provenance still cites the wrong file count");
 });
 
 test("the page carries the same provenance as the data", async () => {
