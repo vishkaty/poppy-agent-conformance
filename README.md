@@ -25,11 +25,12 @@ It does not detect a User ID derived from personal information. Spec 5.1 forbids
 one even with a keyed hash, and the guides allow an HMAC of an internal id with the Company
 identifier. A Company cannot tell those apart on the wire, so no check here claims to.
 
-It does not verify a delegation against the signing key published at the agent `jwks_uri`.
-Nothing in this grader fetches anything: the only outbound requests it makes are the canary legs
-that gate a run. So a delegation is taken at its word, and the `client_id` a Session JWT names is
-attested only by that delegation. This is the largest gap here and it is being closed; until it
-is, 5.3 step 1 is not performed.
+It does not verify a delegation against the key published at the agent `jwks_uri` UNLESS the
+deployment asks for it. That was the largest gap here and it is closed: with
+`verify_delegations` set, the signature is checked against the key the agent publishes, and a
+delegation signed by a key published nowhere is refused. Without it, 5.3 step 1 is not
+performed and the rule abstains as this grader's own limit rather than passing for free. Which
+state a report was produced in is in the report, so it never has to be guessed.
 
 ## Three verdicts, and why
 
@@ -494,8 +495,9 @@ failures named every request in the run rather than the ones that breached, beca
 had dropped the request while iterating the delegations. And a method mismatch on a real
 destination answered 404, telling an agent its endpoint was wrong when it was not.
 
-In the other direction, our rules caught every breach their validator sent: fourteen failures,
-each matching one of its probes, and no conforming request failed.
+In the other direction, our rules caught the breaches their validator sent. In the run of
+2026-11-20, 20 of its requests broke a rule this Company enforces, all 20 were refused, and the
+report attributed them to 15 of the 27 rules. No request of its that conformed was refused.
 
 Their validator and this Company disagree about one thing, and the disagreement is recorded
 here rather than resolved by changing our answer. 3.2 says a Company that sets `auth.disabled`
@@ -555,11 +557,11 @@ Personal Agent. Every breach it deliberately sent was caught. No verdict about a
 software has been published from it, and none will be: a report goes to the builder who
 leased the run and nowhere else.
 
-What this grader does NOT do, stated plainly because the absence is the thing that misleads:
-it does not verify a delegation signature against the key at the agent jwks_uri, it cannot
-tell a hashed User ID from a random one, and it records and judges rather than rejecting, so
-a request that breaks a rule still gets the ordinary answer and the verdict arrives in the
-report. A Company that rejects what it judges is the next thing to build.
+What this grader does NOT do, stated plainly because the absence is the thing that misleads: it
+cannot tell a hashed User ID from a random one, 5.1 forbids deriving one even with a keyed hash,
+and a Company cannot tell those apart on the wire. It does verify a delegation against the key
+the agent publishes, and it does refuse what it judges, both of which it did not do when this
+section was first written; the sections above say what that costs and when it is off.
 
 If you build a Personal Agent and want it graded, open an issue. Reports go to the builder,
 not to the public.
