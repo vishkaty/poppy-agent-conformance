@@ -38,6 +38,12 @@ export const BREACH = {
   // A request carrying the Session header and no Poppy-Version, which 3.4 makes a per-request
   // failure with its own error. The historical rule below is a different breach: two values
   // inside one Session.
+  // A request id with characters 8.2 does not allow. 8.13 lists "an ID with characters not
+  // allowed (8.2)" under invalid_request, and this Company answers exactly that, so a rule had
+  // to fault it or the status and the verdict disagreed about one request.
+  "conversation.id-format":     async () => [await f.request(keys, { method: "POST", path: "/poppy/conversations",
+                                                                     conversationRoute: "start", sub: "user-one",
+                                                                     body: JSON.stringify({ id: "msg 1/2", message: { text: "hello" } }) })],
   // A conversation POST with no request id. 8.3 makes it a MUST on the agent and 8.13 names
   // the answer, and a body carrying the id inside `message` with none at the top level is a
   // shape real traffic has had, which is how this rule came to exist.

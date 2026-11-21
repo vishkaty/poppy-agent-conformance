@@ -9,7 +9,7 @@ Personal Agent puts on the wire, which only the Company it is talking to can see
 
 ## What it does
 
-Twenty eight checks over a recorded request log. Twenty six need one Company. Two need
+Twenty nine checks over a recorded request log. Twenty seven need one Company. Two need
 two Companies, because the rules they test are pairwise: a User ID must differ per Company
 (spec 5.1) and a delegated key must sign for one User ID only (spec 5.2), so no single
 Company can observe either.
@@ -25,13 +25,13 @@ It does not detect a User ID derived from personal information. Spec 5.1 forbids
 one even with a keyed hash, and the guides allow an HMAC of an internal id with the Company
 identifier. A Company cannot tell those apart on the wire, so no check here claims to.
 
-It checks that a conversation POST carries a request id and that one User does not use the same
-id for two different requests, which is the sentence 8.3 makes a MUST. It does NOT check the
-shape of the id: 8.2 says a request id is 1 to 256 characters from the URL safe base64 alphabet,
-and an id outside that passes here while this Company itself answers `invalid_request` for it.
-So a run can show a request its own Company refused beside a rule that found nothing wrong with
-it, and the report names both rather than reconciling them. That is a missing rule and it is
-written here because the gap is the thing that misleads.
+It checks that a conversation POST carries a request id, that one User does not use the same id
+for two different requests, and that the id is 1 to 256 characters from the URL safe base64
+alphabet, which is what 8.3 and 8.2 require of an agent. The alphabet rule applies the same
+pattern this Company's own conversation handler applies, and a test holds the two together, so a
+report cannot show a request this Company refused beside a rule that found nothing wrong with it.
+What is still unchecked is anything beyond length and alphabet, deliberately: 8.2 says the side
+that chooses an ID decides its format and the other side MUST NOT depend on it.
 
 It does not verify a delegation against the key published at the agent `jwks_uri` UNLESS the
 deployment asks for it. That was the largest gap here and it is closed: with
@@ -143,7 +143,7 @@ Session. Telling an agent the wrong one sends it into a loop.
 instruction to `invalid_session`, and this Company ends no Session and holds no account, so no
 failure here can be one.
 
-Seven rules are reported and never refused, each with its reason in `enforce.mjs`: the three
+Eight rules are reported and never refused, each with its reason in `enforce.mjs`: the three
 that need more than one request to decide, the one about documents, the two privacy rules,
 which are the most contestable accusations this grader makes and so are never used to close a
 door, and the request id rule of 8.3, whose answer 8.13 puts under `invalid_request` while this
@@ -633,15 +633,15 @@ than a citation.
 
 Early, and honest about what has been measured.
 
-Twenty eight rules, and 116 mutations that each break one guard and require a named test
+Twenty nine rules, and 119 mutations that each break one guard and require a named test
 to notice. The test count is deliberately not quoted here: it went stale twice in one day, and
 `npm test` prints it. It has been run against synthetic traffic, against traffic minted by the
 authors own signing code, and end to end through a tunnel at a real hostname on 443. That last
 one is not a past event. Every lease is preceded by a control in which this grader drives
 itself with the authors own signing code, including one leg through the public hostname, and
 refuses to grade at all unless every rule that control exercises passes. On a deployment that
-verifies delegations, which the live one does, the control covers twenty seven of the twenty
-eight rules. The one it cannot exercise is `session.ath`: this grader issues no access tokens,
+verifies delegations, which the live one does, the control covers twenty eight of the twenty
+nine rules. The one it cannot exercise is `session.ath`: this grader issues no access tokens,
 so a conforming agent sends no `ath` here, and the rule is judged only for a builder who points
 a signed-in code path at it with a token of their own.
 

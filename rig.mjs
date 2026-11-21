@@ -38,7 +38,7 @@ export const CANARY_RULES = [
   "delegation.no-private-key", "version.constant", "version.sent",
   // The canary's own conversation POST carries a request id (8.3), so this rule is exercised
   // by the control rather than excluded from it.
-  "conversation.request-id",
+  "conversation.request-id", "conversation.id-format",
   "pairwise.user-id", "pairwise.delegated-key",
 ];
 

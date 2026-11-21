@@ -64,6 +64,7 @@ export const ENFORCE_EXCLUDED = {
   // `invalid_session` and `version_unsupported` only, so refusing from here would answer the
   // wrong error for the breach; the conversation handler already answers it where the
   // specification does.
+  "conversation.id-format": "8.13 lists an ID with characters not allowed (8.2) under `invalid_request`, and this path answers `invalid_session` or `version_unsupported` only, so enforcing it here would name the wrong error. The conversation handler refuses such an id where the specification puts it.",
   "conversation.request-id": "8.13 puts a missing request id under `invalid_request`, and this path answers `invalid_session` or `version_unsupported` only, so enforcing it here would name the wrong error. The conversation handler answers it where the specification puts it.",
 
   "session.jti-unique": "Reuse needs two requests to observe, so it is not decidable on the request in front of you, and 5.3 only says a Company MAY reject a reused jti.",

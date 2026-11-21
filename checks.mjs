@@ -911,6 +911,45 @@ export const CHECKS = [
         : `${read} conversation POST(s) each carried a request id. Uniqueness for the User was not compared, because no Session header on them identified a User`);
     },
   },
+  {
+    id: "conversation.id-format",
+    section: "8.2",
+    quote: "Conversation IDs, request IDs, message IDs, and event IDs are strings of 1 to 256 characters from the URL-safe base64 alphabet",
+    // The gap the README named before this rule existed: this Company answers `invalid_request`
+    // for an id outside the alphabet, as 8.13 says it should, while no rule faulted it. A report
+    // that shows a refused request beside a clean verdict leaves a builder unable to tell which
+    // of the two to believe, and that disagreement is the thing this grader exists to prevent.
+    //
+    // Only the ids the AGENT chooses. 8.2: "The Company chooses Conversation IDs, event IDs, and
+    // the IDs of its own messages. The Personal Agent chooses request IDs", so a Conversation ID
+    // in a path is not the agent's to answer for. The same sentence ends "the side that chooses
+    // an ID decides its format, and the other side MUST NOT depend on it", which is why nothing
+    // here looks at anything beyond length and alphabet.
+    //
+    // A request with no id at all is left to conversation.request-id. Two rules faulting one
+    // request for one mistake would count it twice and read as two defects.
+    run(log) {
+      const posts = log.filter(r => r.method === "POST" && r.conversationRoute
+                                    && !r.unsafeTarget && !r.refused
+                                    && r.bodyComplete !== false && !r.bodyTruncated);
+      const ids = [];
+      for (const r of posts) {
+        let parsed = null;
+        try { parsed = JSON.parse(r.body ?? ""); } catch { parsed = null; }
+        if (parsed && Object.hasOwn(parsed, "id")) ids.push({ r, id: parsed.id });
+      }
+      if (!ids.length) return SKIP("no POST to a conversation route carried a request id this grader could read");
+      // The same alphabet and bound this Company's own conversation handler applies, so a status
+      // code and a verdict about one request cannot disagree.
+      const allowed = /^[A-Za-z0-9_-]{1,256}$/;
+      const bad = ids.filter(({ id }) => typeof id !== "string" || !allowed.test(id));
+      return bad.length
+        ? FAIL("a request id is not 1 to 256 characters from the URL-safe base64 alphabet, which 8.2 defines",
+               bad.slice(0, 3).map(({ r, id }) => `${r.method} ${r.path}: ${JSON.stringify(id).slice(0, 40)}`),
+               bad.map(({ r }) => r))
+        : PASS(`${ids.length} request id(s) are letters, digits, hyphen or underscore, 1 to 256 characters`);
+    },
+  },
 ];
 
 // The cross-Company checks. These need logs from BOTH hostnames, and they are the reason

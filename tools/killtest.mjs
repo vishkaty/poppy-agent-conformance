@@ -336,6 +336,17 @@ export const MUTATIONS = [
   { id: "checks/retry-counted-as-reuse", file: "checks.mjs", tests: "tests/checks.test.mjs",
     kills: "still a retry when its body is serialised differently",
     find: "        if (seen && seen !== shape) clashing.push(r);", to: "        if (seen) clashing.push(r);" },
+  // 8.2's alphabet, which closed a disagreement between this Company's own answer and its verdicts.
+  { id: "checks/id-format-unchecked", file: "checks.mjs", tests: "tests/checks.test.mjs",
+    kills: "outside the alphabet 8.2 allows is caught",
+    find: "      const allowed = /^[A-Za-z0-9_-]{1,256}$/;", to: "      const allowed = /^.*$/s;" },
+  { id: "checks/id-format-wrong-bound", file: "checks.mjs", tests: "tests/checks.test.mjs",
+    kills: "outside the alphabet 8.2 allows is caught",
+    find: "      const allowed = /^[A-Za-z0-9_-]{1,256}$/;", to: "      const allowed = /^[A-Za-z0-9_-]{1,255}$/;" },
+  { id: "checks/id-format-faults-missing", file: "checks.mjs", tests: "tests/checks.test.mjs",
+    kills: "outside the alphabet 8.2 allows is caught",
+    find: "        if (parsed && Object.hasOwn(parsed, \"id\")) ids.push({ r, id: parsed.id });",
+    to: "        if (parsed) ids.push({ r, id: parsed.id });" },
   // Each of these made the 8.3 rule accuse a conforming agent, and none of them was caught by a
   // test until an adversarial review built the inputs.
   { id: "checks/request-id-any-post", file: "checks.mjs", tests: "tests/checks.test.mjs",

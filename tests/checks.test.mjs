@@ -462,3 +462,46 @@ test("the request id rule judges conversation routes and nothing else", async ()
     `a POST to a listed API was judged against 8.3's request ids: ${v.verdict} ${v.why}`);
   assert.match(v.why, /conversation route/i);
 });
+
+// 8.2's id format. The gap the README named: our own Company answers `invalid_request` for an id
+// outside the allowed alphabet while no rule faulted it, so a report could show a refused request
+// beside a rule that found nothing wrong with it. That disagreement between a status code and a
+// verdict is the thing this grader exists to prevent.
+test("a request id outside the alphabet 8.2 allows is caught, and a long one too", async () => {
+  const keys = await f.agentKeys();
+  const withId = async (id) => f.request(keys, {
+    method: "POST", path: "/poppy/conversations", conversationRoute: "start", sub: "user-one",
+    body: JSON.stringify({ id, message: { text: "hello" } }) });
+  const verdict = async (id) =>
+    grade([await withId(id)], f.ctx).find(x => x.id === "conversation.id-format");
+
+  assert.equal((await verdict("req_1-A_b2")).verdict, "PASS", "letters, digits, - and _ are the alphabet");
+  assert.equal((await verdict("msg 1/2")).verdict, "FAIL", "a space and a slash are not in the alphabet");
+  assert.equal((await verdict("a".repeat(257))).verdict, "FAIL", "8.2 allows 1 to 256 characters");
+  assert.equal((await verdict("a".repeat(256))).verdict, "PASS", "256 is allowed, so the bound is inclusive");
+
+  // A missing id belongs to the other rule, and two rules accusing one request for one mistake
+  // would double count it.
+  const noId = await f.request(keys, { method: "POST", path: "/poppy/conversations",
+                                       conversationRoute: "start", sub: "user-one",
+                                       body: JSON.stringify({ message: { text: "hello" } }) });
+  const v = grade([noId], f.ctx).find(x => x.id === "conversation.id-format");
+  assert.equal(v.verdict, "INCONCLUSIVE", `a missing id was faulted twice: ${v.why}`);
+});
+
+test("this Company never refuses a request id that its own rules accept", async () => {
+  // The disagreement, as a test rather than as a hope. Whatever the Company's own conversation
+  // handler rejects as a malformed id, the rule must fault too, or a builder sees a 400 beside a
+  // clean verdict and cannot tell which of the two to believe.
+  const { conversationRouteOf } = await import("../record.mjs");
+  const keys = await f.agentKeys();
+  for (const id of ["msg 1/2", "a".repeat(257), "has+plus", "has=pad", ""]) {
+    const rec = await f.request(keys, { method: "POST", path: "/poppy/conversations",
+                                        conversationRoute: "start", sub: "user-one",
+                                        body: JSON.stringify({ id, message: { text: "x" } }) });
+    const verdicts = grade([rec], f.ctx);
+    const faulted = verdicts.some(v => v.verdict === "FAIL"
+      && (v.id === "conversation.id-format" || v.id === "conversation.request-id"));
+    assert.ok(faulted, `this Company refuses the id ${JSON.stringify(id)} and no rule faults it`);
+  }
+});
