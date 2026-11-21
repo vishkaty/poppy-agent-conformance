@@ -86,6 +86,7 @@ export async function request(keys, over = {}) {
       ...(over.token ? { authorization: `DPoP ${over.token}` } : {}),
     },
     body: over.body ?? "",
+    conversationRoute: over.conversationRoute ?? null,
     issuerKeys: issuerKeysFor(keys, over),
   };
 }
@@ -113,7 +114,12 @@ export async function conformingLog(keys, over = {}) {
     discovery,
     request(keys, { ...over, sid, sub, dlgCompact, path: "/poppy/orders" }),
     request(keys, { ...over, sid, sub, dlgCompact, path: "/poppy/orders/1" }),
-    request(keys, { ...over, sid, sub, dlgCompact, method: "POST", path: "/poppy/conversations" }),
+    // 8.3: "Every `POST` body has an `id`, chosen by the Personal Agent". A conforming agent
+    // sends one, and the record carries which conversation route it is, so the rule about
+    // request IDs has something to pass on.
+    request(keys, { ...over, sid, sub, dlgCompact, method: "POST", path: "/poppy/conversations",
+                    body: JSON.stringify({ id: "req-" + randomUUID(), message: { text: "hello" } }),
+                    conversationRoute: "start" }),
     request(keys, { ...over, sid, sub, dlgCompact, path: "/poppy/orders/2",
                     token, ath: createHash("sha256").update(token).digest("base64url") }),
   ]);

@@ -39,7 +39,7 @@ test("every vendored file is the file its provenance claims", () => {
 });
 
 // One conforming request, built entirely with the authors' helpers.
-async function referenceRequest(ctx, { key, delegation, sid, sub, method = "GET", path = "/poppy/orders", token, operatorJwk } = {}) {
+async function referenceRequest(ctx, { key, delegation, sid, sub, method = "GET", path = "/poppy/orders", token, operatorJwk, body = "", conversationRoute = null } = {}) {
   const url = `https://${ctx.domain}${path}`;
   const jwt = await ref.signSessionJwt({
     key, delegation, iss: CLIENT_ID, aud: ctx.identifier,
@@ -55,9 +55,10 @@ async function referenceRequest(ctx, { key, delegation, sid, sub, method = "GET"
     issuerKeys: { outcome: "ok", iss: CLIENT_ID, jwksUri: "https://agent.example/jwks.json",
                   keys: [operatorJwk], kids: [], source: "fetch", fetchedAt: ref.nowSeconds(), ageSeconds: 0 },
     sessionHeaderCount: 1, sessionHeaderDecodable: true, sessionHeaderDuplicated: false,
+    conversationRoute,
     headers: { "poppy-session": jwt, "poppy-version": "1.0",
                ...(token ? { authorization: `DPoP ${token}` } : {}) },
-    body: "",
+    body,
   };
 }
 
@@ -85,7 +86,11 @@ test("traffic built by the authors' own signing code passes every check", async 
       sessionHeaderDecodable: false, sessionHeaderDuplicated: false },
     await referenceRequest(CTX_A, { ...id }),
     await referenceRequest(CTX_A, { ...id, path: "/poppy/orders/1" }),
-    await referenceRequest(CTX_A, { ...id, method: "POST", path: "/poppy/conversations" }),
+    // 8.3 requires a request id on every conversation POST. Without one here the control would
+    // abstain on that rule, and a control that abstains proves less than one that passes.
+    await referenceRequest(CTX_A, { ...id, method: "POST", path: "/poppy/conversations",
+                                    conversationRoute: "start",
+                                    body: JSON.stringify({ id: `ref_${ref.randomId(8)}`, message: { text: "hello" } }) }),
     await referenceRequest(CTX_A, { ...id, path: "/poppy/orders/2", token }),
   ];
   const out = grade(log, CTX_A);

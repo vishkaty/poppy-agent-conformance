@@ -20,6 +20,7 @@
 // The tests use a deliberately overlapping fixture for this reason. A fixture whose URLs do
 // not collide proves the fixture's geometry and not the rule.
 
+import { createHash } from "node:crypto";
 const u = s => { try { return new URL(s); } catch { return null; } };
 const norm = p => (p.replace(/\/+$/, "") || "/");
 export const pathOf = s => { const x = u(s); return x ? norm(x.pathname) : null; };
@@ -142,6 +143,18 @@ export function classify(url, method, cfg) {
   for (const e of cfg.extensionEndpoints ?? [])
     if (samePath(e)) return { isResource: true, isPage: false, mustNotCarry: false, why: "an extension endpoint (3.3)" };
 
+  // 5b. a path a listed API describes, reached with a method it does not describe. Not a
+  //    destination, because 5.2 counts "the request URLs its listed APIs describe" and this
+  //    method is not among them; and emphatically not a web page, which is where it used to
+  //    land. Found when a POST reached a path the OpenAPI lists only for GET: a JSON
+  //    API path was reported as a page where the Session header is a SHOULD, which is advice
+  //    about a rule that does not apply, in the one bucket where a missing header can never
+  //    fail. Said plainly instead, since the likeliest cause is the document and not the agent.
+  for (const op of cfg.apiOperations ?? [])
+    if (matchesTemplate(path, op.template))
+      return { isResource: false, isPage: false, mustNotCarry: false,
+               why: `a path a listed OpenAPI describes (${op.template}), with the method ${m}, which it does not describe: no rule treats it as a destination` };
+
   // 6. a page of the Company's own website, where 5.2 makes the header a SHOULD. Its absence
   //    can never be a failure, which is why it is recorded separately.
   const domain = String(d.organization?.domain ?? "").toLowerCase();
@@ -224,6 +237,13 @@ export function allowedMethodsFor(url, cfg) {
 //
 // `body` is null when none was sent and "" when an empty one was, because 8.2 requires every
 // POST to carry a JSON body and a later check needs to tell those apart.
+// A request target this grader will not classify: dot segments or a backslash mean the path it
+// would serve and the path it would judge can differ, and a rule that judged the wrong one would
+// be worse than no rule. The Company refuses such a target; a recorder standing in front of
+// somebody else's Company forwards it and records that no rule looked at it. One definition, so
+// the two cannot drift apart.
+export const isUnsafeTarget = t => /(^|\/)\.\.?(\/|$)/.test(String(t)) || String(t).includes("\\");
+
 export function recordOf(req, cfg, { at, body = null, bodyComplete = true } = {}) {
   const target = req.url ?? "/";
   const url = publicUrl(cfg.origin, target);
@@ -246,5 +266,38 @@ export function recordOf(req, cfg, { at, body = null, bodyComplete = true } = {}
     sessionHeaderCount: session.count,
     sessionHeaderDecodable: session.decodable,
     sessionHeaderDuplicated: session.count > 1,
+    // Which conversation route of 8.2 this is, when it is one. Carried on the record because a
+    // check is pure over the log and cannot consult a Company's configuration, and 8.3's rule
+    // about request IDs applies to these POSTs and to no others: insisting on an `id` in every
+    // POST a Company lists would invent a requirement for APIs that have their own bodies.
+    conversationRoute: misdirected ? null : (conversationRouteOf(url, method, cfg)?.route ?? null),
   };
+}
+
+// Read a request body into the record. It lives here rather than in the server because it
+// belongs to the record: a recorder standing outside a Company has to capture a body exactly
+// as the Company would, or a verdict about the body is a statement about which capture path
+// ran. `done` is called only when the body completed, so a request that aborts stays in the
+// log as incomplete rather than being answered or dropped. The two halves disagree on purpose:
+// `body` stops at the cap so a report cannot be filled with somebody's upload, while the hash
+// covers every byte that arrived, so an oversize body is still identifiable.
+export function readBody(req, record, maxBody, done) {
+  const chunks = []; let bytes = 0; const hash = createHash("sha256");
+  record.body = ""; record.bodyComplete = false;
+  req.on("data", c => {
+    hash.update(c); bytes += c.length;
+    if (bytes <= maxBody) chunks.push(c);
+    else record.bodyTruncated = true;
+  });
+  req.on("end", () => {
+    record.body = Buffer.concat(chunks).toString("utf8");
+    record.bodySha256 = hash.digest("hex");
+    record.bodyBytes = bytes;
+    record.bodyComplete = true;
+    done();
+  });
+  // aborted, reset, or the socket closed before `end`: the record stays incomplete and says
+  // so, rather than disappearing.
+  req.on("aborted", () => { record.bodySha256 = hash.digest("hex"); record.bodyBytes = bytes; });
+  req.on("error", () => { record.bodyComplete = false; });
 }

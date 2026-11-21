@@ -284,3 +284,181 @@ test("an iss that is not an HTTPS URL is its own failure, with section 3's sente
   assert.equal(v.verdict, "INCONCLUSIVE", `${v.verdict}: ${v.why}`);
   assert.match(v.why, /iss-https/, v.why);
 });
+
+test("session.not-on-documents abstains for an agent that never sent a Session at all", async () => {
+  // Found by a run that fetched poppy.json and nothing else, sent no Session JWT, and was
+  // PASSED by this rule. The pass was free. An agent with no Session JWT
+  // anywhere has not reached the point the rule governs, which is the choice of where to send
+  // one, and this file's own header says INCONCLUSIVE means exactly that. A rule that `curl`
+  // passes tells a builder their agent keeps Session JWTs off documents when nothing checked.
+  const log = [
+    { seq: 1, at: 1, method: "GET", path: "/.well-known/poppy.json", url: "https://shop.example/.well-known/poppy.json",
+      headers: {}, mustNotCarry: true, isResource: false, isPage: false,
+      sessionHeaderCount: 0, classifiedAs: "a discovery document (5.2)" },
+    { seq: 2, at: 2, method: "GET", path: "/poppy/openapi.json", url: "https://shop.example/poppy/openapi.json",
+      headers: {}, mustNotCarry: true, isResource: false, isPage: false,
+      sessionHeaderCount: 0, classifiedAs: "a description document (5.2)" },
+  ];
+  const v = grade(log, f.ctx).find(x => x.id === "session.not-on-documents");
+  assert.equal(v.verdict, "INCONCLUSIVE",
+    `an agent that sent no Session JWT anywhere was given a PASS on where it sends them: ${v.why}`);
+  assert.equal(v.cause, "unreached", "this is the agent not reaching the rule, not the grader failing to judge");
+});
+
+test("an undecodable Session header sent to a document is still the breach", async () => {
+  // The control for the abstention above, and it was added because a mutation proved the
+  // comment beside that guard was unprotected: switching the test from "any Session header" to
+  // "a decodable Session JWT" broke nothing. 5.2 forbids sending a Company's Session JWT to
+  // these destinations; an agent that sends unparseable bytes in that header has still sent
+  // something there, and excusing it would mean the worse agent escapes the rule.
+  const log = [
+    { seq: 1, at: 1, method: "GET", path: "/.well-known/poppy.json", url: "https://shop.example/.well-known/poppy.json",
+      headers: { "poppy-session": "not-a-jwt" }, mustNotCarry: true, isResource: false, isPage: false,
+      sessionHeaderCount: 1, sessionHeaderDecodable: false, classifiedAs: "a discovery document (5.2)" },
+  ];
+  const v = grade(log, f.ctx).find(x => x.id === "session.not-on-documents");
+  assert.equal(v.verdict, "FAIL",
+    `a Session header was sent to a document and the rule said ${v.verdict}: ${v.why}`);
+});
+
+// 8.3's request IDs. Added after a conversation POST with no top-level `id` passed every rule
+// here: a real 1.0 MUST that no rule of ours named, so a builder would have been told nothing
+// was wrong.
+test("a conversation POST with no request id fails, and a retry with the same id does not", async () => {
+  const post = (over = {}) => ({
+    seq: 1, at: 1, method: "POST", path: "/poppy/conversations", url: "https://shop.example/poppy/conversations",
+    headers: {}, isResource: true, sessionHeaderCount: 1, conversationRoute: "start",
+    body: JSON.stringify({ message: { text: "hello" } }), ...over });
+
+  const missing = grade([post()], f.ctx).find(x => x.id === "conversation.request-id");
+  assert.equal(missing.verdict, "FAIL", `a POST with no id was not caught: ${missing?.why}`);
+
+  const withId = grade([post({ body: JSON.stringify({ id: "r1", message: { text: "hello" } }) })], f.ctx)
+    .find(x => x.id === "conversation.request-id");
+  assert.equal(withId.verdict, "PASS", `a conforming POST was failed: ${withId.why}`);
+
+  // 8.3: "To retry a request, the Personal Agent sends it again to the same path with the same
+  // ID." So a repeated id with the same path and body is required behaviour, not a breach.
+  const retry = [post({ seq: 1, at: 1, body: JSON.stringify({ id: "r1", message: { text: "hi" } }) }),
+                 post({ seq: 2, at: 2, body: JSON.stringify({ id: "r1", message: { text: "hi" } }) })];
+  const retried = grade(retry, f.ctx).find(x => x.id === "conversation.request-id");
+  assert.equal(retried.verdict, "PASS", `a legitimate retry was failed: ${retried.why}`);
+
+  // But the same id on a different body, from ONE User, is the uniqueness breach the MUST names.
+  // These records carry a real Session JWT, because the User is what the sentence is about and a
+  // request with no Session leaves it unknowable: a fixture without one would be asserting the
+  // old, wrong behaviour of comparing ids globally.
+  const keys = await f.agentKeys();
+  const sub = "user-one";
+  const reused = [
+    await f.request(keys, { method: "POST", path: "/poppy/conversations", conversationRoute: "start",
+                            sub, body: JSON.stringify({ id: "r1", message: { text: "one" } }) }),
+    await f.request(keys, { method: "POST", path: "/poppy/conversations", conversationRoute: "start",
+                            sub, body: JSON.stringify({ id: "r1", message: { text: "two" } }) }),
+  ];
+  const clash = grade(reused, f.ctx).find(x => x.id === "conversation.request-id");
+  assert.equal(clash.verdict, "FAIL", `an id reused for a different request was not caught: ${clash.why}`);
+
+  // And nothing to judge when the agent never talked to the Company Agent.
+  const none = grade([post({ conversationRoute: null, method: "GET" })], f.ctx)
+    .find(x => x.id === "conversation.request-id");
+  assert.equal(none.verdict, "INCONCLUSIVE");
+  assert.equal(none.cause, "unreached");
+});
+
+// The ways this rule accused a conforming agent, every one of them found by an adversarial
+// review rather than by the suite. A wrong rule in a public grader costs more than a missing
+// one, so each is a named test.
+test("the request id rule does not accuse an agent whose body this grader could not read", async () => {
+  const post = (over = {}) => ({
+    seq: 1, at: 1, method: "POST", path: "/poppy/conversations", url: "https://shop.example/poppy/conversations",
+    headers: {}, isResource: true, sessionHeaderCount: 1, conversationRoute: "start", bodyComplete: true,
+    body: JSON.stringify({ id: "r1", message: { text: "hello" } }), ...over });
+  const verdict = (log) => grade(log, f.ctx).find(x => x.id === "conversation.request-id");
+
+  // A 300 KB message is cut at the body cap, so the id it really sent is not in what we kept.
+  const truncated = verdict([post({ body: '{"id":"r1","mes', bodyTruncated: true })]);
+  assert.notEqual(truncated.verdict, "FAIL",
+    `a truncated body was reported as a missing id: ${truncated.why}`);
+  assert.equal(truncated.cause, "grader", "this is our cap, so the abstention is ours and not the agent's");
+
+  // A socket that went away mid upload is not a protocol breach either.
+  const aborted = verdict([post({ body: '{"id":"r1","mes', bodyComplete: false })]);
+  assert.notEqual(aborted.verdict, "FAIL", `an aborted body was reported as a missing id: ${aborted.why}`);
+});
+
+test("request ids are unique for the User, not across Users", async () => {
+  // 8.3: "which MUST make it unique for the User across all its requests". Two Users of one
+  // agent may each number their own requests from one, and the rule compared ids globally.
+  const keys = await f.agentKeys();
+  const one = await f.request(keys, { method: "POST", path: "/poppy/conversations", conversationRoute: "start",
+                                      sub: "user-A", body: JSON.stringify({ id: "r1", message: { text: "one" } }) });
+  const two = await f.request(keys, { method: "POST", path: "/poppy/conversations", conversationRoute: "start",
+                                      sub: "user-B", body: JSON.stringify({ id: "r1", message: { text: "two" } }) });
+  const v = grade([one, two], f.ctx).find(x => x.id === "conversation.request-id");
+  assert.equal(v.verdict, "PASS", `two Users reusing an id were accused of reusing it: ${v.why}`);
+});
+
+test("a retry is still a retry when its body is serialised differently", async () => {
+  // 8.3 says a retry repeats the path and the ID, and says nothing about member order. The rule
+  // compared raw bytes, so an agent that rebuilt the same JSON was accused of reusing an id for
+  // a different request. This grader was stricter than its own Company, which compares the
+  // parsed body.
+  // A real Session on both, and one User, or the uniqueness half never runs and this test would
+  // prove nothing about how bodies are compared. A mutation caught exactly that: switching the
+  // comparison back to raw bytes broke no test while these records had no Session.
+  const keys = await f.agentKeys();
+  const sub = "user-one";
+  const log = [
+    await f.request(keys, { method: "POST", path: "/poppy/conversations", conversationRoute: "start",
+                            sub, body: '{"id":"r1","message":{"text":"hi"}}' }),
+    await f.request(keys, { method: "POST", path: "/poppy/conversations", conversationRoute: "start",
+                            sub, body: '{"message":{"text":"hi"},"id":"r1"}' }),
+  ];
+  const v = grade(log, f.ctx).find(x => x.id === "conversation.request-id");
+  assert.equal(v.verdict, "PASS", `a re-serialised retry was treated as a different request: ${v.why}`);
+  assert.match(v.why, /compared per User/, "the uniqueness half did not actually run, so this proves nothing");
+});
+
+test("a target this grader refused to classify is not judged by the request id rule either", async () => {
+  // The record says in words that no rule examined it, because the path we would judge is not
+  // provably the path the Company serves. A rule that filtered on the conversation route alone
+  // judged it anyway, which made the report contradict itself.
+  const v = grade([{ seq: 1, at: 1, method: "POST", path: "/poppy/conversations",
+                     url: "https://shop.example/poppy/conversations", headers: {}, bodyComplete: true,
+                     isResource: false, unsafeTarget: true, conversationRoute: "start",
+                     sessionHeaderCount: 1, body: JSON.stringify({ message: { text: "x" } }),
+                     classifiedAs: "the target has dot segments or a backslash: examined by no rule" }], f.ctx)
+    .find(x => x.id === "conversation.request-id");
+  assert.equal(v.verdict, "INCONCLUSIVE",
+    `a request the record says no rule examined was judged anyway: ${v.verdict} ${v.why}`);
+});
+
+test("when this grader cannot tell whose request it is, it does not judge uniqueness for the User", async () => {
+  // 8.3's uniqueness is per User, and the User comes from the Session JWT. A conversation POST
+  // with no Session header leaves that unknowable, and guessing that two such requests belong to
+  // one User is how this rule would accuse an agent of reusing an id across Users. Sending no
+  // Session header there is itself a breach, and session.header-sent is the rule that says so:
+  // this one judges its own sentence and abstains where it cannot.
+  const post = (body, seq) => ({
+    seq, at: seq, method: "POST", path: "/poppy/conversations", url: "https://shop.example/poppy/conversations",
+    headers: {}, isResource: true, sessionHeaderCount: 0, conversationRoute: "start", bodyComplete: true, body });
+  const v = grade([post(JSON.stringify({ id: "r1", message: { text: "one" } }), 1),
+                   post(JSON.stringify({ id: "r1", message: { text: "two" } }), 2)], f.ctx)
+    .find(x => x.id === "conversation.request-id");
+  assert.notEqual(v.verdict, "FAIL",
+    `two requests of unknown Users were accused of sharing an id: ${v.why}`);
+});
+
+test("the request id rule judges conversation routes and nothing else", async () => {
+  // Proved necessary by a mutation: deleting the conversation-route filter broke no test at all,
+  // so the scope the rule's own comment claims was unprotected. An API operation a Company lists
+  // has its own body, and requiring an `id` there would be a rule nobody wrote.
+  const keys = await f.agentKeys();
+  const apiPost = await f.request(keys, { method: "POST", path: "/poppy/orders",
+                                          body: JSON.stringify({ item: "x" }) });
+  const v = grade([apiPost], f.ctx).find(x => x.id === "conversation.request-id");
+  assert.equal(v.verdict, "INCONCLUSIVE",
+    `a POST to a listed API was judged against 8.3's request ids: ${v.verdict} ${v.why}`);
+  assert.match(v.why, /conversation route/i);
+});

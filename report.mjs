@@ -172,10 +172,16 @@ function worstOf(verdicts) {
 }
 
 export function buildReport(run) {
+  // One Company is a real shape, not two with a hole in it. A recorded run is judged from
+  // whatever the builder recorded, and handing this function a faked empty second Company made
+  // the fake visible: "recorded at shop.example and undefined", a per-Company badge reading
+  // `undefined` beside every abstention, and a destinations sentence naming a Company nobody ran.
   const [A, B] = run.companies;
+  const both = run.companies.filter(Boolean);
+  const names = both.map(c => c.ctx?.domain).filter(Boolean);
   const runToken = run.token ?? "";
   // One index across both Companies, in time order, so an ordinal identifies a request.
-  const all = [...A.log.map(r => ({ r, origin: A.ctx.identifier })), ...B.log.map(r => ({ r, origin: B.ctx.identifier }))]
+  const all = both.flatMap(c => c.log.map(r => ({ r, origin: c.ctx.identifier })))
     .sort((x, y) => (x.r.at ?? 0) - (y.r.at ?? 0));
   const ordinalOf = new Map();
   const requests = all.map(({ r }, i) => { ordinalOf.set(r, i + 1); return redactRecord(r, i + 1, runToken); });
@@ -195,16 +201,31 @@ export function buildReport(run) {
     ? `The last request this grader saw, #${ordinalOf.get(last)}, was refused under ${stoppedBy.rule} with ${stoppedBy.error}, and nothing followed it. Section 7 tells a Personal Agent that receives ${stoppedBy.error} to stop sending the request until it fixes the cause, so the rules below that were not reached may be unreached because this Company stopped your agent there, and not because your agent does not implement them. Fix that one request and run again.`
     : null;
 
-  const perA = grade(A.log, A.ctx), perB = grade(B.log, B.ctx);
-  const byId = id => [
-    { company: A.ctx.identifier, ...perA.find(x => x.id === id) },
-    { company: B.ctx.identifier, ...perB.find(x => x.id === id) },
-  ].map(v => ({ company: v.company, verdict: v.verdict, cause: v.cause ?? null, why: v.why,
+  const perEach = both.map(c => ({ identifier: c.ctx.identifier, verdicts: grade(c.log, c.ctx) }));
+  const byId = id => perEach
+    .map(c => ({ company: c.identifier, ...c.verdicts.find(x => x.id === id) }))
+    .map(v => ({ company: v.company, verdict: v.verdict, cause: v.cause ?? null, why: v.why,
                 evidence: v.evidence ?? [],
                 decidedBy: (v.decidedBy ?? []).map(r => ordinalOf.get(r)).filter(Boolean) }));
 
+  // A recorded run is judged against the builder's OWN Company, so advice written for the hosted
+  // rig is not merely unhelpful there, it is wrong: it tells a builder to point a signed-in code
+  // path at "this grader", which in a recorded run is their own service. Replaced, not appended.
+  const recorded = run.mode === "recorded";
+  const RECORDED_REACH = {
+    "session.ath": { reachable: true, how: "Your own Company issues the access tokens here, so drive your agent through a signed-in task against it and this rule is judged for real, which a hosted run cannot do." },
+    "session.not-on-documents": { reachable: true, how: "The recorder saw no fetch of a document 5.2 forbids a Session on. If your poppy.json or OpenAPI document is served by another host, record that host too and judge the files together: one issuer is one Company (3.2), so the logs join." },
+    "pairwise.user-id": { reachable: true, how: "This needs two Companies with different identifiers. Record a second Company and pass both files to the judge." },
+    "pairwise.delegated-key": { reachable: true, how: "This needs two Companies with different identifiers. Record a second Company and pass both files to the judge." },
+  };
   const reachFor = (id) => {
-    const base = REACH[id];
+    // In a recorded run the Company being driven is the builder's own, so advice that says
+    // "this grader" is telling them to point their agent at themselves. The four rules whose
+    // advice changes completely have overrides above; for the rest only the name is wrong.
+    const named = (b) => (recorded && b?.how)
+      ? { ...b, how: b.how.replace(/this grader/g, "your own Company") }
+      : b;
+    const base = named((recorded && RECORDED_REACH[id]) || REACH[id]);
     if (!stopped) return base;
     // Not appended to the old advice: the old advice is wrong here, so it is replaced. What is
     // kept is the note for a rule this grader cannot offer at all, which is our limit and not
@@ -221,11 +242,31 @@ export function buildReport(run) {
              reach: worst === "INCONCLUSIVE" ? reachFor(c.id) : null,
              threshold: c.id === "session.iat-window" ? `${WINDOW_SECONDS} s plus ${SKEW_SECONDS} s of clock skew` : null };
   });
-  const pairwise = gradePair(A.log, B.log, A.ctx, B.ctx).map(v => ({
+  const pairwise = gradePair(A.log, B?.log ?? [], A.ctx, B?.ctx ?? null).map(v => ({
     id: v.id, section: v.section, quote: v.quote, anchor: anchorFor(v.section), link: specLink(v.section),
     verdict: v.verdict, cause: v.cause ?? null, why: v.why, evidence: v.evidence ?? [],
     reach: v.verdict === "INCONCLUSIVE" ? reachFor(v.id) : null,
   }));
+
+  // Requests this Company answered with an error that NO rule claimed. Found when conversation
+  // requests were refused by the 5.3 state guard, which is not an enforced rule: `rejected`
+  // stayed 0 and the report said nothing was refused while the agent had been told, in section
+  // 7's words, to stop sending the request.
+  //
+  // Computed HERE, after the verdicts, because "no rule claims it" has to be a statement about
+  // the verdicts rather than a guess. It was a guess, and it contradicted them: a conversation
+  // POST with no request id is answered 400 by the conversation handler and is also the evidence
+  // of the 8.3 FAIL, so the report said no rule claimed a request that a rule below cited by
+  // number. A 502 from the recorder when a Company cannot be reached is excluded too, because
+  // that is not an answer the Company gave.
+  const claimedByARule = new Set();
+  for (const c of perEach)
+    for (const v of c.verdicts)
+      if (v.verdict === "FAIL") for (const r of v.decidedBy ?? []) claimedByARule.add(r);
+  const answeredWithError = all.filter(({ r }) =>
+    !r.rejection && !claimedByARule.has(r)
+    && (r.response?.status ?? 0) >= 400
+    && r.response?.error !== "recorder_upstream_unreachable");
 
   const count = v => rules.filter(r => r.worst === v).length + pairwise.filter(p => p.verdict === v).length;
   const summary = {
@@ -235,6 +276,13 @@ export function buildReport(run) {
     unjudged: [...rules.filter(r => r.worst === "INCONCLUSIVE" && r.perCompany.some(c => c.cause === "grader")),
                ...pairwise.filter(p => p.verdict === "INCONCLUSIVE" && p.cause === "grader")].length,
     rules: rules.length + pairwise.length, requests: requests.length,
+    // Requests this Company answered with an error that NO rule claimed. Found when conversation
+    // requests were refused by the 5.3 state guard, which is not an enforced rule: `rejected`
+    // stayed 0 and the report said nothing was refused while the agent had been told, in
+    // section 7's words, to stop sending the request. A report that
+    // shows "failed 0" beside a refusal it does not mention is the kind of quiet disagreement
+    // this grader exists to prevent.
+    answeredWithError: answeredWithError.length,
     // Requests this Company refused rather than answered. Counted here because a report whose
     // failures all come from refused requests is a different thing from one whose failures came
     // from requests that were served.
@@ -252,7 +300,7 @@ export function buildReport(run) {
     : `Of the ${summary.rules} rules this grader can judge, your agent failed ${summary.fail}, `
       + `passed ${summary.pass}, did not reach ${summary.unreached}, and ${summary.unjudged} `
       + `could not be judged by the grader, on ${summary.requests} requests recorded at `
-      + `${A.ctx.domain} and ${B.ctx.domain}`
+      + `${names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}` : names[0] ?? "this Company"}`
       + (run.started && run.ended ? ` between ${iso(run.started)} and ${iso(run.ended)}.` : ".");
 
   const issuers = [...new Set(all.map(({ r }) => decodeJwt(r.headers?.["poppy-session"])?.payload?.iss).filter(Boolean))];
@@ -263,19 +311,40 @@ export function buildReport(run) {
     grader: { commit: run.graderCommit ?? "unknown", oracle: oracleIdentity(),
               clock: iso(Math.floor(Date.now() / 1000)) },
     run: { started: run.started ?? null, ended: run.ended ?? null, frozen: !!run.frozen,
-           companies: [A.ctx.identifier, B.ctx.identifier], issuers },
+           companies: both.map(c => c.ctx.identifier), issuers },
     summary, topSentence, rules, pairwise, requests,
+    answeredWithError: answeredWithError.length
+      ? `${answeredWithError.length} request(s) were answered with an error by this Company that no rule below claims: `
+        + answeredWithError.slice(0, 3).map(({ r }) => `#${ordinalOf.get(r)} ${r.method} ${r.path} answered ${r.response.status}`
+            + `${r.response.error ? ` ${r.response.error}` : ""}`).join(", ")
+        + ". Those are this Company's own answers rather than a rule's verdict, so read them beside the verdicts and not instead of them."
+      : null,
+    // What kind of run this was, and what that costs. A recorded run is judged from a file its
+    // owner could have edited, so it is evidence to its owner and to nobody else. Saying so is
+    // the difference between a useful self-check and a certificate nobody should trust.
+    selfRecorded: recorded
+      ? `Self-recorded run. This log was recorded by a recorder in front of your own Company at ${A.origin ?? A.ctx?.identifier ?? "your origin"} and judged on this machine. Nothing in it was observed by anyone else, so it is evidence to you and not to a third party. If your agent and this recorder ran on one machine they share a clock, so a pass on session.iat-window says less here than it would across a network; and this grader did not fetch the documents of your agent, so delegation.signature abstains as its own limit rather than as anything about your agent.`
+      : null,
     about: {
       judgedAgainst: `Personal Agent Protocol ${PROV.version} as published ${PROV.published}, from commit ${PROV.commit} of personal-agent-protocol/personal-agent-protocol, verified against the authors' own hashes.`,
       scope: `This grader judges ${summary.rules} rules of ${PROV.version}: ${CHECKS.length} that one Company can see and ${PAIRWISE.length} that need two. ${PROV.version} contains many more requirements. A PASS on a rule means the recorded requests satisfied that sentence. It is not a statement that your agent conforms to ${PROV.version}.`,
-      destinations: `The grader saw only what reached ${A.ctx.domain} and ${B.ctx.domain}. A request to any other origin was examined by no rule.`,
+      destinations: `The grader saw only what reached ${names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}` : names[0] ?? "this Company"}. A request to any other origin was examined by no rule.`,
       notJudged: [
         // Conditional, because it stopped being true. A report whose own delegation.signature
         // verdict was decided from a fetched key set must not also list that rule as
         // unimplemented, and a deployment that fetches nothing must still say that it does not.
+        // Three cases, not two. A deployment that fetched and succeeded says nothing here; one
+        // that fetched and failed says why, in the words the resolver used, because blaming our
+        // own configuration for the agent's unreachable identity sends a builder looking in the
+        // wrong place; one that never fetches says so.
         ...(all.some(({ r }) => r.issuerKeys?.outcome === "ok")
           ? []
-          : ["A delegation's signature against the key published at the agent's jwks_uri. This deployment did not fetch the agent's documents, so the delegation is shown as not verified."]),
+          : (() => {
+              const tried = all.map(({ r }) => r.issuerKeys).find(k => k && k.outcome !== "ok" && k.detail);
+              return [tried
+                ? `A delegation's signature against the key published at the agent's jwks_uri. This deployment did fetch, and could not read a key set: ${tried.detail}. The delegation is shown as not verified for that reason.`
+                : "A delegation's signature against the key published at the agent's jwks_uri. This deployment did not fetch the agent's documents, so the delegation is shown as not verified."];
+            })()),
         "Whether a User ID or Agent ID was derived from personal information. 5.1 forbids it even with a keyed hash, and the guides allow an HMAC of an internal id, which a Company cannot tell apart on the wire.",
       ],
       recordedNotJudged: {
@@ -303,8 +372,12 @@ export function buildReport(run) {
         ? `${run.beforeLease} request(s) reached the Companies in the ${Math.round((run.beforeLeaseWindowSeconds ?? 600) / 60)} minutes before this run was leased and belong to no run, so no rule judged them. An agent that fetches a discovery document once at startup and caches it does it here, which is the usual reason a rule about documents is not reached by a run that did everything right.`
         : null,
       transport: "Verdicts are judged against the request as this grader received it. Anything in front of the grader that rewrites a request URL, for example normalising percent encoding or removing dot segments, would be judged as the agent's doing. The grader's own clock is shown above: a constant offset between it and your `iat` values is a clock, not a defect.",
-      privacy: "This report is private to whoever holds its link. It is not listed anywhere and nothing about this run is published.",
-      retention: "The report is held in memory for at most 24 hours, and until this grader process restarts, whichever comes first. After that its link answers exactly what an unknown link answers.",
+      privacy: recorded
+        ? "This report was built on your own machine from a log on your own disk. Nothing about this run reached anyone else, and nothing is published."
+        : "This report is private to whoever holds its link. It is not listed anywhere and nothing about this run is published.",
+      retention: recorded
+        ? "This file lives wherever you put it, for as long as you keep it. Judge the same log again and you get the same verdicts."
+        : "The report is held in memory for at most 24 hours, and until this grader process restarts, whichever comes first. After that its link answers exactly what an unknown link answers.",
       notReplayable: "Signatures, access tokens and bodies are not shown on this page, so the verdicts cannot be rerun from it. They are a pure function of the recorded requests at the grader commit above.",
     },
   };
@@ -381,6 +454,8 @@ export function renderHtml(rep) {
     + `h4{font-size:.95rem;margin:.2rem 0}summary{cursor:pointer;font-weight:600}`
     + `</style></head><body>`
     + `<h1>What your agent put on the wire</h1><p>${esc(rep.topSentence)}</p>`
+    + (rep.selfRecorded ? `<p><strong>${esc(rep.selfRecorded)}</strong></p>` : "")
+    + (rep.answeredWithError ? `<p>${esc(rep.answeredWithError)}</p>` : "")
     + `<p>${rep.run.frozen
         ? `This run has ended and is frozen. Save this page; it is not listed anywhere.`
         : `This run is open. Verdicts cover the requests seen so far and will change as more arrive.`}</p>`

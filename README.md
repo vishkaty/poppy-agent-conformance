@@ -9,7 +9,7 @@ Personal Agent puts on the wire, which only the Company it is talking to can see
 
 ## What it does
 
-Twenty seven checks over a recorded request log. Twenty five need one Company. Two need
+Twenty eight checks over a recorded request log. Twenty six need one Company. Two need
 two Companies, because the rules they test are pairwise: a User ID must differ per Company
 (spec 5.1) and a delegated key must sign for one User ID only (spec 5.2), so no single
 Company can observe either.
@@ -24,6 +24,14 @@ It does not check a Company. The authors kit does that, better and at the right 
 It does not detect a User ID derived from personal information. Spec 5.1 forbids deriving
 one even with a keyed hash, and the guides allow an HMAC of an internal id with the Company
 identifier. A Company cannot tell those apart on the wire, so no check here claims to.
+
+It checks that a conversation POST carries a request id and that one User does not use the same
+id for two different requests, which is the sentence 8.3 makes a MUST. It does NOT check the
+shape of the id: 8.2 says a request id is 1 to 256 characters from the URL safe base64 alphabet,
+and an id outside that passes here while this Company itself answers `invalid_request` for it.
+So a run can show a request its own Company refused beside a rule that found nothing wrong with
+it, and the report names both rather than reconciling them. That is a missing rule and it is
+written here because the gap is the thing that misleads.
 
 It does not verify a delegation against the key published at the agent `jwks_uri` UNLESS the
 deployment asks for it. That was the largest gap here and it is closed: with
@@ -135,10 +143,12 @@ Session. Telling an agent the wrong one sends it into a loop.
 instruction to `invalid_session`, and this Company ends no Session and holds no account, so no
 failure here can be one.
 
-Nine rules are reported and never refused, each with its reason in `enforce.mjs`: the three
-that need more than one request to decide, the one about documents, and the two privacy rules,
+Seven rules are reported and never refused, each with its reason in `enforce.mjs`: the three
+that need more than one request to decide, the one about documents, the two privacy rules,
 which are the most contestable accusations this grader makes and so are never used to close a
-door.
+door, and the request id rule of 8.3, whose answer 8.13 puts under `invalid_request` while this
+path speaks `invalid_session` only, so the conversation handler answers it instead. The count
+was wrong here for two days in a row, which is why a test now derives it.
 
 ## Enough of section 8 that an agent can finish a conversation
 
@@ -497,7 +507,8 @@ destination answered 404, telling an agent its endpoint was wrong when it was no
 
 In the other direction, our rules caught the breaches their validator sent. In the run of
 2026-11-20, 20 of its requests broke a rule this Company enforces, all 20 were refused, and the
-report attributed them to 15 of the 27 rules. No request of its that conformed was refused.
+report attributed them to 15 of the 27 rules this grader then had. No request of its that
+conformed was refused.
 
 Their validator and this Company disagree about one thing, and the disagreement is recorded
 here rather than resolved by changing our answer. 3.2 says a Company that sets `auth.disabled`
@@ -509,6 +520,80 @@ the whole of it. The same answer also costs `assertion.jti-reuse`, which is a SH
 reports as the one warning, and nothing outside the token endpoint fails: in the run of
 2026-11-20 their report was ninety three passed, five failed, one warning and thirty four
 skipped, and all six of the failures and the warning are `assertion.` checks.
+
+## Record it yourself, so nothing has to reach us
+
+Everything above asks you to point your agent at a hostname somebody else runs. That is a lot to
+ask: your traffic goes to a stranger, and the stranger sees it. The recorder removes the ask. It
+is a reverse proxy you run in front of your OWN Company, so the log is made on your machine and
+judged on your machine, and nothing about your agent reaches anyone.
+
+```sh
+node record-cli.mjs config.json          # record, then stop it with Ctrl-C
+node record-cli.mjs judge run.jsonl      # rebuild the report from the file, offline
+```
+
+```json
+{
+  "origin": "https://api.shop.example",
+  "upstream": "http://127.0.0.1:3000",
+  "listen": "127.0.0.1:8790",
+  "discovery": "./poppy.json",
+  "openapi": ["./openapi.json"],
+  "auth_server_metadata": "./oauth-authorization-server.json",
+  "log": "./runs/today.jsonl"
+}
+```
+
+`origin` is the public URL your agent uses for this host, never the address the recorder binds.
+Behind any TLS terminator those differ, and `htu` is compared against the former: it is the
+setting most likely to make this report wrong about a conforming agent. So the recorder refuses to
+start when nothing in your own document is on that origin, because a recorder in front of the
+wrong origin classifies every request as not a destination, abstains on every rule, and reads as
+a pass.
+
+What it is: the same record, from the same code. Every field a rule reads comes from the
+functions the hosted Company uses, over the same raw request, and a test asserts field for field
+that the two capture paths agree on identical bytes. Raw headers go through with their duplicates, the Host is not
+rewritten, and the body is teed rather than buffered, because a proxy that tidies the request
+hides exactly the breaches 5.2 is about.
+
+What it refuses: nothing. Your Company decides what to answer; the recorder records what it
+answered. A report from a recorded run never claims this grader refused anything, and a request
+answered with an error is shown as the answer your Company gave rather than as a verdict. The one
+thing the recorder answers by itself is a 502 when your Company cannot be reached at all, and it
+records that as the answer rather than as a refusal, because the request is still evidence.
+
+What it cannot judge, and says so:
+
+- `delegation.signature`, at all. The recorder does not fetch the documents of the agent, so
+  this rule abstains in every recorded run as a limit of this grader rather than as anything
+  about the agent, and the report says exactly that. Verification is a setting of the hosted
+  deployment and the recorder does not offer it yet.
+- The two pairwise rules, until you record a second Company with a different identifier and pass
+  both files to `judge`. Two recordings of the SAME identifier are joined into one log instead,
+  because 3.2 says several domains with one issuer are one Company.
+- `session.iat-window` is judged, but an agent and a recorder on one machine share a clock, so a
+  pass there says less than it does across a network. The report discloses that rather than
+  hiding it.
+
+And the honest limit, stated where you will read it: a log you could have edited is evidence to
+you and to nobody else. That is why a recorded report labels itself a self-recorded run. It is
+not a certificate and it is not meant to be one; it is the same question the hosted grader asks,
+without the part where you trust us.
+
+## One thing that bites before any rule runs
+
+A default User-Agent can be refused before this grader sees the request. Pointing a client with
+`User-Agent: Python-urllib/3.12` at the hosted deployment got a 403 from the CDN in front of it,
+with no rule involved and nothing in the report, because the request never arrived. The same
+class of surprise applies in reverse to a delegation fetch: a bot rule in front of your
+`jwks_uri` answers this grader rather than your key set. A 403 there is a response, so it is not
+counted as our failure to judge, and it is not a failure of yours either, because only 404 and
+410 are: the rule abstains and the report names the status. A fetch that got no bytes at all,
+which is DNS, TLS or a timeout, is counted as our failure to judge. Send a User-Agent that identifies your
+agent, and if a run records fewer requests than you sent, look at what is in front of either side
+before looking at the rules.
 
 ## Keeping up with the specification
 
@@ -548,25 +633,27 @@ than a citation.
 
 Early, and honest about what has been measured.
 
-Twenty seven rules, and ninety three mutations that each break one guard and require a named test
+Twenty eight rules, and 116 mutations that each break one guard and require a named test
 to notice. The test count is deliberately not quoted here: it went stale twice in one day, and
 `npm test` prints it. It has been run against synthetic traffic, against traffic minted by the
 authors own signing code, and end to end through a tunnel at a real hostname on 443. That last
 one is not a past event. Every lease is preceded by a control in which this grader drives
 itself with the authors own signing code, including one leg through the public hostname, and
 refuses to grade at all unless every rule that control exercises passes. On a deployment that
-verifies delegations, which the live one does, the control covers twenty six of the twenty
-seven rules. The one it cannot exercise is `session.ath`: this grader issues no access tokens,
+verifies delegations, which the live one does, the control covers twenty seven of the twenty
+eight rules. The one it cannot exercise is `session.ath`: this grader issues no access tokens,
 so a conforming agent sends no `ath` here, and the rule is judged only for a builder who points
 a signed-in code path at it with a token of their own.
 
 It has been run against two agents nobody here wrote. The first is the authors own kit
 validator, acting as a Personal Agent: every breach it deliberately sent was caught. The second
-is an independent Personal Agent SDK, driven through a signed-out task at the live deployment on
-2026-11-20: of the 27 rules, 23 passed, none failed, 3 were not reached, and one could not be
-judged because the agent identity in that run did not resolve. That run is the better evidence
-of the two, because nothing in it was written to be graded, and it is also where the refusal
-text above was found to be wrong.
+is a Personal Agent SDK nobody here wrote, driven through a signed-out task at the live
+deployment on 2026-11-20, against the 27 rules this grader had that day: 23 passed, none failed,
+3 were not reached, and one could not be judged because the agent identity in that run did not
+resolve. The run has not been repeated against the 28 rules there are now, and the rule that was
+added after it came from looking at that traffic, so do not read the figures as current. That run
+is the better evidence of the two, because nothing in it was written to be graded, and it is also
+where the refusal text above was found to be wrong.
 
 No verdict about anyone else software has been published from it, and none will be: a report
 goes to the builder who leased the run and nowhere else. That is why the SDK is not named here.

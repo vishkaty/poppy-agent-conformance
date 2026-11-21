@@ -323,3 +323,49 @@ test("the token endpoint answers each kind of bad request the way RFC 6749 does"
     assert.deepEqual(meta.grant_types_supported, ["refresh_token"]);
   } finally { await g.close(); }
 });
+
+// Reading a builder's own OpenAPI document, for the recorder. Our hosted Company builds its
+// document from the same list it classifies against, so the two cannot disagree; a builder's
+// document is the only statement of what their APIs are, and it has to be read the way 5.2
+// describes: "the request URLs its listed APIs describe".
+test("templatesOfOpenapi reads method and template pairs from a builder's document", async () => {
+  const { templatesOfOpenapi } = await import("../discovery.mjs");
+  const doc = {
+    openapi: "3.1.0",
+    servers: [{ url: "https://api.shop.example/v1" }],
+    paths: {
+      "/orders": { get: {}, post: {} },
+      "/orders/{id}": { get: {}, delete: {}, parameters: [] },
+    },
+  };
+  const got = templatesOfOpenapi(doc, "https://api.shop.example").map(t => `${t.method} ${t.template}`).sort();
+  assert.deepEqual(got, ["DELETE /v1/orders/{id}", "GET /v1/orders", "GET /v1/orders/{id}", "POST /v1/orders"],
+    "the server path must prefix each template, and `parameters` is not a method");
+});
+
+test("templatesOfOpenapi ignores servers on another origin", async () => {
+  // 5.2's destinations are the URLs the listed APIs describe. A document that also describes a
+  // partner's API at another origin must not make our paths destinations, and must not make
+  // theirs ours: the recorder stands in front of one origin and judges only what reaches it.
+  const { templatesOfOpenapi } = await import("../discovery.mjs");
+  const doc = {
+    servers: [{ url: "https://other.example/v2" }],
+    paths: { "/orders": { get: {} } },
+  };
+  assert.deepEqual(templatesOfOpenapi(doc, "https://api.shop.example"), [],
+    "a server on another origin described our own path as a destination");
+});
+
+test("templatesOfOpenapi treats a relative or absent server as this origin", async () => {
+  // OpenAPI defaults `servers` to [{url: "/"}] when it is absent, which is the common shape in
+  // a document served beside the API it describes. Dropping that case would leave a builder
+  // with a document we read as describing nothing, and every request classified as not a
+  // destination, which reads as conformance.
+  const { templatesOfOpenapi } = await import("../discovery.mjs");
+  const relative = { servers: [{ url: "/v3" }], paths: { "/orders": { get: {} } } };
+  const absent = { paths: { "/orders": { get: {} } } };
+  assert.deepEqual(templatesOfOpenapi(relative, "https://api.shop.example"),
+    [{ method: "GET", template: "/v3/orders" }]);
+  assert.deepEqual(templatesOfOpenapi(absent, "https://api.shop.example"),
+    [{ method: "GET", template: "/orders" }]);
+});

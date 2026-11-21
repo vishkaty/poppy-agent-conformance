@@ -417,3 +417,117 @@ test("the report does not tell a builder a rule is unimplemented when it just re
   assert.equal(saysUnimplemented(repOff), true,
     "a deployment that fetched nothing hid that fact instead of listing it");
 });
+
+test("a recorded report says it was self-recorded, and drops the sentences only a hosted run can make", async () => {
+  // A report judged from a builder's own log is evidence to the builder and to nobody else: the
+  // only reader is the one person who could have edited the file. That is acceptable and it is
+  // already the project's position, since reports go to the builder and nowhere else. What is
+  // not acceptable is a recorded report wearing a hosted run's sentences. "Private to whoever
+  // holds its link" and "held in memory for at most 24 hours" describe a page on somebody
+  // else's machine; for a file on your own disk they are simply false, and the advice beside an
+  // unreached session.ath tells a builder to point a signed-in path at a grader that is in fact
+  // their own Company.
+  const { judge } = await import("../recorder.mjs");
+  const { renderHtml } = await import("../report.mjs");
+  const ctx = { identifier: "https://shop.example/poppy", domain: "shop.example" };
+  const { report } = judge([{ header: { origin: "https://shop.example", ctx }, records: [] }],
+                           { graderCommit: "test" });
+
+  assert.equal(report.mode, "recorded");
+  const html = renderHtml(report);
+  assert.match(html, /self-recorded/i, "a recorded report must say what kind of run it was");
+  // The README says the report discloses the shared clock and the unfetched agent documents
+  // rather than hiding them. It did not, until a review checked the claim against the code.
+  assert.match(html, /share a clock/i, "the report does not disclose that one machine shares a clock");
+  assert.match(html, /did not fetch the documents of your agent/i,
+    "the report does not say that delegation.signature abstains as this grader's own limit");
+  for (const hosted of ["whoever holds its link", "held in memory", "was leased"])
+    assert.ok(!html.includes(hosted), `a recorded report still claims "${hosted}"`);
+  assert.ok(!/issues no access tokens/.test(html),
+    "the advice beside session.ath still describes this grader as the Company");
+  assert.match(report.about?.privacy ?? "", /your own machine|this file|on disk/i,
+    "the privacy sentence must describe a file, not a hosted page");
+});
+
+test("a request the Company refused outside the rules is visible, and the key-set sentence tells the truth", async () => {
+  // Both found at the live deployment. Two requests were answered 400 invalid_session by the
+  // 5.3 conversation guard, which is not an enforced rule,
+  // so `rejection` was unset and the report said nothing was refused. A builder reads "failed 0,
+  // refused 0" while their agent was told to stop sending the request. Separately, the key-set
+  // sentence said "This deployment did not fetch the agent's documents" when in truth it fetched
+  // and DNS failed, which blames the wrong thing.
+  const { buildReport } = await import("../report.mjs");
+  const ctx = { identifier: "https://shop.example/poppy", domain: "shop.example" };
+  // A request nothing here finds fault with, refused for a reason outside the rules. Built with
+  // the fixture rather than by hand: an invented Session header trips session.header-jwt, and a
+  // request a rule already cites is deliberately excluded from this count now, so a hand-made
+  // record would make this test pass for the wrong reason.
+  const keys = await f.agentKeys();
+  const refused = await f.request(keys, { method: "POST", path: "/poppy/conversations",
+                                          conversationRoute: "start", sub: "user-one",
+                                          body: JSON.stringify({ id: "r1", message: { text: "hello" } }) });
+  refused.issuerKeys = { outcome: "grader", detail: "could not resolve agent.example: getaddrinfo ENOTFOUND agent.example" };
+  refused.response = { status: 400, error: "invalid_session" };
+  const log = [refused];
+  const rep = buildReport({ companies: [{ ctx, log }, { ctx: {}, log: [] }], token: "t", graderCommit: "x" });
+
+  assert.equal(rep.summary.answeredWithError, 1,
+    "a request the Company answered 400 was not counted anywhere a builder would see it");
+  assert.match(rep.answeredWithError ?? "", /invalid_session/,
+    "the report does not say which error the Company answered");
+  const notJudged = (rep.about?.notJudged ?? []).join(" ");
+  assert.ok(!/did not fetch the agent's documents/.test(notJudged),
+    `the report claims no fetch was attempted when one failed: ${notJudged}`);
+  assert.match(notJudged, /could not resolve agent\.example/,
+    "the report should say in the resolver's own words why the key set could not be read");
+});
+
+test("a one-Company recorded report renders no undefined, says it is finished, and gives advice that fits", async () => {
+  // Found by building one and reading the HTML. A recorded run was handed a faked empty second
+  // Company so buildReport's two-Company shape would not crash, and the fake leaked: the top
+  // sentence read "recorded at shop.example and undefined", every per-Company badge printed the
+  // literal word, and the page called itself open for ever because nothing froze it. The advice
+  // beside an unreached rule still told the builder to drive their agent "at this grader", which
+  // in a recorded run is their own Company.
+  const { judge } = await import("../recorder.mjs");
+  const { renderHtml } = await import("../report.mjs");
+  const ctx = { identifier: "https://shop.example/poppy", domain: "shop.example" };
+  const { report } = judge([{ header: { origin: "https://shop.example", ctx },
+                              records: [{ seq: 1, at: 1, method: "GET", path: "/poppy/orders",
+                                          url: "https://shop.example/poppy/orders", headers: {},
+                                          isResource: true, sessionHeaderCount: 0 }] }],
+                           { graderCommit: "test" });
+  const html = renderHtml(report);
+  assert.ok(!/undefined/.test(html), `the report renders the word undefined: ${(html.match(/.{60}undefined.{60}/) ?? [])[0]}`);
+  assert.equal(report.run.frozen, true, "a run judged from a file cannot receive more requests");
+  assert.ok(!/This run is open/.test(html), "a file judged offline was called an open run");
+  assert.deepEqual(report.run.companies, [ctx.identifier], "the faked second Company leaked into the report");
+  assert.ok(!/at this grader/.test(html),
+    "a recorded report tells the builder to drive their agent at this grader, which is their own Company here");
+});
+
+test("a request a rule already claims is not also reported as an error no rule claims", async () => {
+  // The sentence contradicted the verdicts: a conversation POST with no request id is answered
+  // 400 invalid_request by the conversation handler and is ALSO the evidence of the 8.3 FAIL, so
+  // the report said no rule claimed a request that a rule below cited by number. And the
+  // recorder's own 502 when a Company cannot be reached is not the Company's answer at all.
+  const { buildReport } = await import("../report.mjs");
+  const ctx = { identifier: "https://shop.example/poppy", domain: "shop.example" };
+  const keys = await f.agentKeys();
+  const claimed = await f.request(keys, { method: "POST", path: "/poppy/conversations",
+                                          conversationRoute: "start", sub: "user-one",
+                                          body: JSON.stringify({ message: { text: "no id here" } }) });
+  claimed.response = { status: 400, error: "invalid_request" };
+  const rep = buildReport({ companies: [{ ctx, log: [claimed] }], token: "t", graderCommit: "x" });
+  assert.equal(rep.rules.find(r => r.id === "conversation.request-id").worst, "FAIL",
+    "the rule did not claim this request, so this test proves nothing");
+  assert.equal(rep.summary.answeredWithError, 0,
+    `a request cited by a FAIL was also counted as an error no rule claims: ${rep.answeredWithError}`);
+
+  const unreachable = { seq: 1, at: 1, method: "GET", path: "/poppy/orders", url: "https://shop.example/poppy/orders",
+                        headers: {}, isResource: true, sessionHeaderCount: 0,
+                        response: { status: 502, error: "recorder_upstream_unreachable" } };
+  const rep2 = buildReport({ companies: [{ ctx, log: [unreachable] }], token: "t", graderCommit: "x", mode: "recorded" });
+  assert.equal(rep2.summary.answeredWithError, 0,
+    "the recorder's own 502 was reported as an answer the Company gave");
+});

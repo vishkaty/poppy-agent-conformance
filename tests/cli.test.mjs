@@ -116,3 +116,75 @@ test("the grader refuses to start on a configuration that cannot grade", async (
   await assert.rejects(() => grader({ companies: [{ port: 0 }] }),
     /exited [^0]/, "a single Company was accepted, so the pairwise rules could never be judged");
 });
+
+// The recorder, through the entry point a builder runs. Same reason as the test above: the
+// config file, the proxy, the log file and the judge meet for the first time here, and a
+// pipeline can be green at every module and broken at the seam.
+test("record it yourself: a conforming agent through the recorder, judged from the file", async () => {
+  const { createServer } = await import("node:http");
+  const { discoveryFor, openapiFor, DEFAULT_OPERATIONS } = await import("../discovery.mjs");
+  const { readRun, judge } = await import("../recorder.mjs");
+  const { readFileSync } = await import("node:fs");
+
+  const dir = mkdtempSync(join(tmpdir(), "poppy-recorder-"));
+  const log = join(dir, "run.jsonl");
+  // The recorder's own address is the public origin the agent will use, so the documents name
+  // it: that is exactly the configuration a builder has when the recorder is the front door.
+  const listenPort = 18_793;
+  const origin = `http://127.0.0.1:${listenPort}`;
+
+  // The builder's own Company. It serves its own documents, because the agent discovers through
+  // the recorder and a Company that answered {} to its own poppy.json would be refused by the
+  // agent for the agent's own good reasons, which would prove nothing about the recorder.
+  const company = createServer((req, res) => {
+    const path = (req.url ?? "/").split("?")[0];
+    res.writeHead(200, { "content-type": "application/json" });
+    if (path === "/.well-known/poppy.json") res.end(JSON.stringify(discoveryFor(origin)));
+    else if (path === "/poppy/openapi.json") res.end(JSON.stringify(openapiFor(origin, DEFAULT_OPERATIONS)));
+    else res.end("{}");
+  });
+  await new Promise(r => company.listen(0, "127.0.0.1", r));
+  const companyPort = company.address().port;
+  writeFileSync(join(dir, "poppy.json"), JSON.stringify(discoveryFor(origin)));
+  writeFileSync(join(dir, "openapi.json"), JSON.stringify(openapiFor(origin, DEFAULT_OPERATIONS)));
+  writeFileSync(join(dir, "config.json"), JSON.stringify({
+    origin, upstream: `http://127.0.0.1:${companyPort}`, listen: `127.0.0.1:${listenPort}`,
+    discovery: join(dir, "poppy.json"), openapi: [join(dir, "openapi.json")], log,
+  }));
+
+  const child = spawn(process.execPath, ["--experimental-strip-types", "record-cli.mjs", join(dir, "config.json")],
+                      { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"] });
+  let out = "";
+  try {
+    await new Promise((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error(`record-cli.mjs printed no recording line in 20s:\n${out}`)), 20_000);
+      child.stdout.on("data", d => { out += d; if (/^recording /m.test(out)) { clearTimeout(t); resolve(); } });
+      child.stderr.on("data", d => { out += d; });
+      child.on("exit", c => { clearTimeout(t); reject(new Error(`record-cli.mjs exited ${c}:\n${out}`)); });
+    });
+    assert.match(out, new RegExp(`for ${origin.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`),
+      "the recording line must say which public origin it is recording for");
+
+    // A conforming agent, built with the protocol authors' own helpers, through the recorder.
+    const a = await agent(origin);
+    const got = await a.send("GET", "/poppy/orders");
+    // Read once, then assert. An assertion message that awaits .text() consumes the body
+    // whether or not the assertion fails, which this project has been bitten by three times.
+    const text = await got.text();
+    assert.equal(got.status, 200, `the Company's answer did not come back through the recorder: ${text}`);
+  } finally {
+    // The child may already be gone (a failed start), and waiting for an exit that has
+    // happened waits for ever. This bit the first run of this test.
+    if (child.exitCode === null && child.signalCode === null)
+      await new Promise(r => { child.on("exit", r); child.kill("SIGINT"); });
+    await new Promise(r => company.close(r));
+  }
+
+  const run = readRun(log);
+  assert.ok(run.records.length >= 1, `nothing was written to the log:\n${out}\n${readFileSync(log, "utf8")}`);
+  const { report } = judge([run], { graderCommit: "test" });
+  assert.equal(report.mode, "recorded");
+  const failed = report.rules.filter(r => r.worst === "FAIL").map(r => r.id);
+  assert.deepEqual(failed, [], `a conforming agent failed through the recorder: ${failed.join(", ")}`);
+  assert.ok(report.selfRecorded?.includes("Self-recorded"), "the report must label itself");
+});

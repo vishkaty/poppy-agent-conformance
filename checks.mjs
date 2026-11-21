@@ -788,6 +788,14 @@ export const CHECKS = [
     // examined at all: an agent sending its Session JWT to poppy.json, an OpenAPI document,
     // a supported_versions document or the token endpoint was simply never looked at.
     run(log) {
+      // An agent that never put a Session header on anything has not reached the point this
+      // rule governs, which is the choice of where to send one. Found by a run that fetched
+      // poppy.json, sent no Session JWT anywhere, and PASSED this rule, which `curl` would also
+      // have earned. The test is the raw header
+      // count and not a decodable JWT on purpose: a garbage Session header sent to a document
+      // is still the breach 5.2 names, and abstaining on it would excuse the worse agent.
+      if (!log.some(r => (r.sessionHeaderCount ?? 0) > 0))
+        return SKIP("no Session header was sent anywhere in this run, so the agent never chose where to send one");
       const docs = log.filter(r => r.mustNotCarry);
       if (!docs.length) return SKIP("the agent fetched no discovery or description document and no OAuth endpoint");
       const leaked = docs.filter(r => r.sessionHeaderCount > 0);
@@ -831,7 +839,78 @@ export const CHECKS = [
                [...new Set(bad.map(d => String(d.header?.alg)))].slice(0, 3), sessionRequests(log).map(x => x.r))
         : PASS(`every delegation used ES256 or PS384 across ${dlgs.length} delegation(s)`);
     },
-  }
+  },
+  {
+    id: "conversation.request-id",
+    section: "8.3",
+    quote: "Every `POST` body has an `id`, chosen by the Personal Agent, which MUST make it unique for the User across all its requests.",
+    // Added because a conversation POST with no top-level `id` passed every rule here, and
+    // nothing said so. It is a MUST on the agent, it is visible on the wire, and 8.13 puts the
+    // Company's answer for it under `invalid_request`, so it belongs to the side this grader
+    // judges.
+    //
+    // Scoped to the conversation routes of 8.2 and to no other POST. An API operation a Company
+    // lists has its own body, and requiring an `id` there would be a rule nobody wrote.
+    //
+    // A repeated id is NOT a breach by itself: 8.3 says "To retry a request, the Personal Agent
+    // sends it again to the same path with the same ID", so a retry is required to reuse it.
+    // What the MUST forbids is the same id standing for a different request, which is why the
+    // comparison is over path and body and not over the id alone.
+    run(log) {
+      // Four ways an earlier version of this rule accused a conforming agent, each now excluded
+      // and each with its own test. They are listed because they are the whole difficulty of the
+      // rule: a body we did not keep in full, a body that never arrived, two Users numbering
+      // their own requests, and a retry whose JSON was rebuilt in a different order.
+      //
+      // A target this grader refused to classify is excluded too. Its record says in words that
+      // no rule examined it, because the path we would judge is not provably the path the
+      // Company serves, and judging it here would make the report contradict itself.
+      const posts = log.filter(r => r.method === "POST" && r.conversationRoute
+                                    && !r.unsafeTarget && !r.refused);
+      if (!posts.length) return SKIP("the agent made no POST to a conversation route (8.2)");
+      // 8.3 makes the id unique "for the User", so the comparison is per User and not global.
+      const userOf = new Map(sessionRequests(log).map(({ r, jwt }) => [r, jwt.payload?.sub ?? null]));
+      const noId = [], seenByUser = new Map(), clashing = [], unreadable = [];
+      for (const r of posts) {
+        // Our cap and a dropped socket are ours, not a breach. The jti rule skips the same way.
+        if (r.bodyComplete === false || r.bodyTruncated) { unreadable.push(r); continue; }
+        let parsed = null;
+        try { parsed = JSON.parse(r.body ?? ""); } catch { parsed = null; }
+        const id = typeof parsed?.id === "string" && parsed.id !== "" ? parsed.id : null;
+        if (!id) { noId.push(r); continue; }
+        // The User comes from the Session JWT. Without one this grader cannot tell two Users
+        // apart, so it does not judge uniqueness for that request rather than guessing they are
+        // one User. Sending no Session header on a destination is its own breach, and
+        // session.header-sent is the rule that reports it.
+        const user = userOf.get(r);
+        if (user === null || user === undefined) continue;
+        const key = `${user}\u0000${id}`;
+        // "To retry a request, the Personal Agent sends it again to the same path with the same
+        // ID", and 8.3 says nothing about member order, so the same request is recognised on a
+        // canonical form rather than on raw bytes.
+        const shape = `${r.path}\u0000${canonicalJson(parsed)}`;
+        const seen = seenByUser.get(key);
+        if (seen && seen !== shape) clashing.push(r); else if (!seen) seenByUser.set(key, shape);
+      }
+      if (noId.length)
+        return FAIL("a POST to a conversation route carried no request id, or one that is not a non-empty string, which 8.3 requires",
+                    noId.slice(0, 3).map(r => `${r.method} ${r.path}`), noId);
+      if (clashing.length)
+        return FAIL("one User sent the same request id for two different requests, so it is not unique for that User",
+                    clashing.slice(0, 3).map(r => `${r.method} ${r.path}`), clashing);
+      // Nothing was readable at all, so neither half of the sentence was examined.
+      if (unreadable.length === posts.length)
+        return SKIP(`${unreadable.length} conversation POST(s) arrived with a body this grader did not keep in full, so the id each carried cannot be read`, "grader");
+      // The sentence has two halves and they are reachable separately: every POST carrying an
+      // id is read from the body alone, while uniqueness for the User needs a Session to say
+      // whose request it is. A PASS that did not compare the second half says so, rather than
+      // leaving a reader to assume both were checked.
+      const read = posts.length - unreadable.length;
+      return PASS(seenByUser.size
+        ? `${read} conversation POST(s) each carried a request id, and ${seenByUser.size} id(s) were compared per User with retries of the same request allowed to repeat one`
+        : `${read} conversation POST(s) each carried a request id. Uniqueness for the User was not compared, because no Session header on them identified a User`);
+    },
+  },
 ];
 
 // The cross-Company checks. These need logs from BOTH hostnames, and they are the reason
@@ -847,6 +926,17 @@ function firstFetchReason(s) {
     if (k && (k.outcome === "grader" || k.outcome === "server") && k.detail) return k.detail;
   }
   return null;
+}
+
+// A stable form of a parsed JSON value, so two serialisations of the same request compare equal.
+// 8.3 defines a retry by its path and its id and says nothing about member order, and the hosted
+// Company compares the parsed body, so comparing raw bytes made this grader stricter than the
+// Company it ships with.
+function canonicalJson(v) {
+  if (Array.isArray(v)) return `[${v.map(canonicalJson).join(",")}]`;
+  if (v && typeof v === "object")
+    return `{${Object.keys(v).sort().map(k => `${JSON.stringify(k)}:${canonicalJson(v[k])}`).join(",")}}`;
+  return JSON.stringify(v) ?? "null";
 }
 
 export function thumbprintOf(jwk) {

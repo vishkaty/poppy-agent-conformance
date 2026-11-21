@@ -60,6 +60,12 @@ export const ENFORCED = [
 ];
 
 export const ENFORCE_EXCLUDED = {
+  // 8.13 puts a missing request id under `invalid_request`. This enforcement path speaks
+  // `invalid_session` and `version_unsupported` only, so refusing from here would answer the
+  // wrong error for the breach; the conversation handler already answers it where the
+  // specification does.
+  "conversation.request-id": "8.13 puts a missing request id under `invalid_request`, and this path answers `invalid_session` or `version_unsupported` only, so enforcing it here would name the wrong error. The conversation handler answers it where the specification puts it.",
+
   "session.jti-unique": "Reuse needs two requests to observe, so it is not decidable on the request in front of you, and 5.3 only says a Company MAY reject a reused jti.",
   "session.sub-stable": "Change within a Session needs two requests in it, and 1.0 names no Company error for it. 5.3 step 4 treats an unknown client_id, sid and User ID combination as a NEW Session rather than a failed check.",
   "version.constant": "Sameness across a Session needs two requests in it and names no Company error. Its per-request half is version.sent, which is enforced.",

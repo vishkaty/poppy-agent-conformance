@@ -9,7 +9,7 @@ import { decodeJwt } from "./checks.mjs";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { recordOf, classify, pathOf, allowedMethodsFor, conversationRouteOf } from "./record.mjs";
+import { recordOf, classify, pathOf, allowedMethodsFor, conversationRouteOf, readBody, isUnsafeTarget } from "./record.mjs";
 import { createConversations } from "./conversations.mjs";
 import { resourceMetadataFor, authServerMetadataFor, authServerMetadataPath, discoveryFor,
          openapiFor, operationsToTemplates, DEFAULT_OPERATIONS, identifierOf,
@@ -176,7 +176,7 @@ export function createGrader(cfg) {
     // and that disagreement is how a request reaches a destination while being judged as
     // something else.
     const rawTarget = String(req.url ?? "/");
-    const unsafe = /(^|\/)\.\.?(\/|$)/.test(rawTarget) || rawTarget.includes("\\");
+    const unsafe = isUnsafeTarget(rawTarget);
 
     // The caller's own control plane, if it shares this listener. Checked AFTER the dot
     // segment refusal above, so a target like /grader/../v1/orders cannot be answered by
@@ -203,24 +203,10 @@ export function createGrader(cfg) {
     const hasBody = req.headers["content-length"] !== undefined || req.headers["transfer-encoding"] !== undefined;
     if (!hasBody) { respond(req, res, record); return; }
 
-    const chunks = []; let bytes = 0; const hash = createHash("sha256");
-    record.body = ""; record.bodyComplete = false;
-    req.on("data", c => {
-      hash.update(c); bytes += c.length;
-      if (bytes <= maxBody) chunks.push(c);
-      else record.bodyTruncated = true;
-    });
-    req.on("end", () => {
-      record.body = Buffer.concat(chunks).toString("utf8");
-      record.bodySha256 = hash.digest("hex");
-      record.bodyBytes = bytes;
-      record.bodyComplete = true;
-      respond(req, res, record);
-    });
-    // aborted, reset, or the socket closed before `end`: the record stays incomplete and
-    // says so, rather than disappearing.
-    req.on("aborted", () => { record.bodySha256 = hash.digest("hex"); record.bodyBytes = bytes; });
-    req.on("error", () => { record.bodyComplete = false; });
+    // One capture path, shared with the recorder that stands outside a Company, so a verdict
+    // about a body is never a statement about which of two readers ran. Its own tests, including
+    // the abort branch, are in tests/record.test.mjs.
+    readBody(req, record, maxBody, () => respond(req, res, record));
   });
 
   // Requests Node refuses before the handler runs. Without this listener they are answered

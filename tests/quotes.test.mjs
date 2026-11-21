@@ -136,3 +136,16 @@ test("the README states the real coverage of the control that gates every lease"
   for (const id of ["session.ath"])
     assert.ok(readme.includes(id), `the README does not name ${id}, the rule the control cannot exercise`);
 });
+
+test("the README states the real number of rules that are reported and never refused", async () => {
+  // This number was wrong in the README twice: it said nine when the code had six, and still
+  // said nine when the code had seven. A reader checking how much of this grader actually
+  // refuses would have been misled in the direction that flatters us, which is the worst
+  // direction. The code owns it now.
+  const { ENFORCE_EXCLUDED } = await import("../enforce.mjs");
+  const readme = readFileSync(join(HERE, "../README.md"), "utf8").replace(/\s+/g, " ");
+  const n = Object.keys(ENFORCE_EXCLUDED).length;
+  const cap = (w) => w[0].toUpperCase() + w.slice(1);
+  assert.ok(readme.includes(`${cap(spell(n))} rules are reported and never refused`),
+    `the README does not say "${cap(spell(n))} rules are reported and never refused" for ${n}`);
+});

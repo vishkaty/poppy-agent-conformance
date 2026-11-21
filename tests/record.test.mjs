@@ -196,3 +196,68 @@ test("a body that was never sent is distinguished from an empty one", () => {
   const empty = recordOf({ method: "POST", url: "/poppy/conversations", headers: { "content-length": "0" } }, CFG, { body: "" });
   assert.equal(empty.body, "");
 });
+
+// The body reader, extracted so a recorder outside a Company captures a body the same way the
+// Company does. Its own tests live here because it belongs to the record, not to the server,
+// and because the branch that matters is the one that only happens when a client goes away.
+test("readBody keeps the bytes it saw when the request never ends", async () => {
+  // The abort branch is the whole reason this is worth a test of its own. A reader that only
+  // handles `end` loses the request entirely, and a grader that loses requests cannot say it
+  // recorded what it judged. The hash must cover what arrived, and the record must say it is
+  // incomplete rather than look like an empty body.
+  const { readBody } = await import("../record.mjs");
+  const { EventEmitter } = await import("node:events");
+  const req = new EventEmitter();
+  const record = {};
+  let doneCalled = 0;
+  readBody(req, record, 1_000_000, () => { doneCalled++; });
+
+  req.emit("data", Buffer.from('{"mes'));
+  req.emit("aborted");
+  req.emit("error", new Error("socket reset"));
+
+  const { createHash } = await import("node:crypto");
+  assert.equal(record.bodyComplete, false, "an aborted body must not look complete");
+  assert.equal(record.bodyBytes, 5);
+  assert.equal(record.bodySha256, createHash("sha256").update('{"mes').digest("hex"),
+    "the hash must cover the bytes that arrived, not the bytes that were kept");
+  assert.equal(doneCalled, 0, "nothing should answer a request whose body never arrived");
+});
+
+test("readBody truncates what it keeps and hashes what it got", async () => {
+  // The two halves disagree on purpose: `body` is capped so a report cannot be filled with
+  // someone's upload, while the hash is over everything, so an oversize body is still
+  // identifiable. A reader that hashed only the kept bytes would make those two agree and the
+  // flag meaningless.
+  const { readBody } = await import("../record.mjs");
+  const { EventEmitter } = await import("node:events");
+  const { createHash } = await import("node:crypto");
+  const req = new EventEmitter();
+  const record = {};
+  let done = false;
+  readBody(req, record, 4, () => { done = true; });
+
+  req.emit("data", Buffer.from("abcd"));
+  req.emit("data", Buffer.from("efgh"));
+  req.emit("end");
+
+  assert.equal(done, true);
+  assert.equal(record.body, "abcd", "the kept body must stop at the cap");
+  assert.equal(record.bodyTruncated, true);
+  assert.equal(record.bodyBytes, 8);
+  assert.equal(record.bodyComplete, true);
+  assert.equal(record.bodySha256, createHash("sha256").update("abcdefgh").digest("hex"));
+});
+
+test("a listed API path reached with a method the document does not describe is not a web page", async () => {
+  // Found when a POST reached a path the OpenAPI lists only for GET: the record called it "a website page, where 5.2 makes the header a SHOULD". It is not a
+  // page. 5.2 counts "the request URLs its listed APIs describe", and this method is not
+  // described, so no rule should treat it as a destination; but calling a JSON API path a web
+  // page tells a builder the header was optional there for a reason that does not exist, and it
+  // puts the request in the one bucket where a missing Session can never be a failure.
+  const got = classify("https://shop.example/v1/orders", "DELETE", CFG);
+  assert.equal(got.isPage, false, `a DELETE to a listed GET path was classified as a page: ${got.why}`);
+  assert.equal(got.isResource, false, "the document does not describe this method, so it is not a destination");
+  assert.equal(got.mustNotCarry, false);
+  assert.match(got.why, /method/i, `the record must say what is actually going on: ${got.why}`);
+});

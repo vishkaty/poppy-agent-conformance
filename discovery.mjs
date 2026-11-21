@@ -122,6 +122,37 @@ export const DEFAULT_OPERATIONS = [
 export const operationsToTemplates = (operations = DEFAULT_OPERATIONS) =>
   operations.map(op => ({ method: String(op.method).toUpperCase(), template: op.path }));
 
+// The same pairs, read out of a builder's OWN OpenAPI document, for a recorder that stands in
+// front of a Company it did not configure. 5.2 counts "the request URLs its listed APIs
+// describe", so three things decide a template and none of them is a prefix: the server path,
+// which OpenAPI defaults to "/" when `servers` is absent; the origin, because a document may
+// describe a partner's API elsewhere and those URLs are not this Company's destinations; and
+// the method, because `paths` entries also carry `parameters`, `summary` and `$ref`, which are
+// not operations and would otherwise become destinations answering to any verb.
+const HTTP_METHODS = ["get", "put", "post", "delete", "options", "head", "patch", "trace"];
+export function templatesOfOpenapi(doc, origin) {
+  if (!doc || typeof doc !== "object" || !doc.paths || typeof doc.paths !== "object") return [];
+  const here = (() => { try { return new URL(origin).origin; } catch { return null; } })();
+  if (!here) return [];
+  const bases = [];
+  const servers = Array.isArray(doc.servers) && doc.servers.length ? doc.servers : [{ url: "/" }];
+  for (const srv of servers) {
+    if (!srv || typeof srv.url !== "string") continue;
+    let base;
+    try { base = new URL(srv.url, here); } catch { continue; }
+    if (base.origin !== here) continue;            // a partner's API is not this Company's
+    bases.push(base.pathname.replace(/\/+$/, ""));  // "/" becomes "", so templates stay absolute
+  }
+  const out = [];
+  for (const base of bases)
+    for (const [path, item] of Object.entries(doc.paths)) {
+      if (!item || typeof item !== "object" || !path.startsWith("/")) continue;
+      for (const m of HTTP_METHODS)
+        if (item[m]) out.push({ method: m.toUpperCase(), template: `${base}${path}` });
+    }
+  return out;
+}
+
 // The domain's protected resource metadata, RFC 9728, at /.well-known/oauth-protected-resource.
 //
 // 3.2: "its `resource` MUST be exactly `https://{organization.domain}`, and its

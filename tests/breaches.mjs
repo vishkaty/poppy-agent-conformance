@@ -38,6 +38,12 @@ export const BREACH = {
   // A request carrying the Session header and no Poppy-Version, which 3.4 makes a per-request
   // failure with its own error. The historical rule below is a different breach: two values
   // inside one Session.
+  // A conversation POST with no request id. 8.3 makes it a MUST on the agent and 8.13 names
+  // the answer, and a body carrying the id inside `message` with none at the top level is a
+  // shape real traffic has had, which is how this rule came to exist.
+  "conversation.request-id":    async () => [await f.request(keys, { method: "POST", path: "/poppy/conversations",
+                                                                     conversationRoute: "start",
+                                                                     body: JSON.stringify({ message: { text: "hello" } }) })],
   "version.sent":               async () => [await f.request(keys, { version: null })],
   "session.header-sent":        async () => [await f.request(keys, { noSession: true })],
   "session.typ":                async () => [await f.request(keys, { sesTyp: "JWT" })],
