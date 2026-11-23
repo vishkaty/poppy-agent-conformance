@@ -647,13 +647,17 @@ a signed-in code path at it with a token of their own.
 
 It has been run against two agents nobody here wrote. The first is the authors own kit
 validator, acting as a Personal Agent: every breach it deliberately sent was caught. The second
-is a Personal Agent SDK nobody here wrote, driven through a signed-out task at the live
-deployment on 2026-11-20, against the 27 rules this grader had that day: 23 passed, none failed,
-3 were not reached, and one could not be judged because the agent identity in that run did not
-resolve. The run has not been repeated against the 28 rules there are now, and the rule that was
-added after it came from looking at that traffic, so do not read the figures as current. That run
-is the better evidence of the two, because nothing in it was written to be graded, and it is also
-where the refusal text above was found to be wrong.
+is a Personal Agent SDK nobody here wrote. Driven through a signed-out task at the live
+deployment on 2026-11-23, across both Companies, and signing with a published test identity so
+that the key set behind its delegation could really be fetched: of the 29 rules, **28 passed,
+none failed, one was not reached, and none was left unjudged by this grader**. The one not reached
+is `session.ath`, and no agent can reach it here, because this Company issues no access tokens.
+
+That is the strongest evidence in this repository, because nothing in that traffic was written to
+be graded by it. An earlier run of the same SDK on 2026-11-20, before it had a reachable identity,
+left `delegation.signature` unjudgeable and reached 23 of the 27 rules there were that day; it is
+also where the refusal text above was found to be wrong, and where two of the rules now here came
+from. The figures moved because the instrument did, so they are dated.
 
 No verdict about anyone else software has been published from it, and none will be: a report
 goes to the builder who leased the run and nowhere else. That is why the SDK is not named here.
