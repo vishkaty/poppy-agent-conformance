@@ -336,6 +336,13 @@ export const MUTATIONS = [
   { id: "checks/retry-counted-as-reuse", file: "checks.mjs", tests: "tests/checks.test.mjs",
     kills: "still a retry when its body is serialised differently",
     find: "        if (seen && seen !== shape) clashing.push(r);", to: "        if (seen) clashing.push(r);" },
+  // The classification fix had a named test and no mutation, which a review caught: a fix nothing
+  // can break is a fix nothing proves. A POST to a path a listed OpenAPI describes only for GET
+  // used to be reported as a web page, where the Session header is only a SHOULD.
+  { id: "checks/post-to-get-path-is-a-page", file: "record.mjs", tests: "tests/record.test.mjs",
+    kills: "is not a web page",
+    find: "  for (const op of cfg.apiOperations ?? [])\n    if (matchesTemplate(path, op.template))",
+    to: "  for (const op of [])\n    if (matchesTemplate(path, op.template))" },
   // 8.2's alphabet, which closed a disagreement between this Company's own answer and its verdicts.
   { id: "checks/id-format-unchecked", file: "checks.mjs", tests: "tests/checks.test.mjs",
     kills: "outside the alphabet 8.2 allows is caught",

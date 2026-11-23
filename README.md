@@ -633,7 +633,7 @@ than a citation.
 
 Early, and honest about what has been measured.
 
-Twenty nine rules, and 119 mutations that each break one guard and require a named test
+Twenty nine rules, and 120 mutations that each break one guard and require a named test
 to notice. The test count is deliberately not quoted here: it went stale twice in one day, and
 `npm test` prints it. It has been run against synthetic traffic, against traffic minted by the
 authors own signing code, and end to end through a tunnel at a real hostname on 443. That last
@@ -651,7 +651,8 @@ is a Personal Agent SDK nobody here wrote. Driven through a signed-out task at t
 deployment on 2026-11-23, across both Companies, and signing with a published test identity so
 that the key set behind its delegation could really be fetched: of the 29 rules, **28 passed,
 none failed, one was not reached, and none was left unjudged by this grader**. The one not reached
-is `session.ath`, and no agent can reach it here, because this Company issues no access tokens.
+is `session.ath`, and no conforming agent can reach it here, because this Company issues no access
+tokens. An agent that sent a stray Authorization header would reach it, which is the only way to.
 
 That is the strongest evidence in this repository, because nothing in that traffic was written to
 be graded by it. An earlier run of the same SDK on 2026-11-20, before it had a reachable identity,
@@ -659,8 +660,13 @@ left `delegation.signature` unjudgeable and reached 23 of the 27 rules there wer
 also where the refusal text above was found to be wrong, and where two of the rules now here came
 from. The figures moved because the instrument did, so they are dated.
 
-No verdict about anyone else software has been published from it, and none will be: a report
-goes to the builder who leased the run and nowhere else. That is why the SDK is not named here.
+About those figures, said precisely, because the sentence that used to sit here claimed more than
+this page does. No agent is named, here or anywhere, and no report from any run is published: a
+report goes to whoever leased the run and nowhere else. What is published is the count above, as
+evidence about this instrument rather than about software anyone else wrote, and a count beside an
+subject is still something its author could recognise. So the rule this project actually keeps is
+narrower than "no verdict is published": nothing identifies a subject, nothing of theirs is
+quotable from here, and anything beyond a count stays with the builder.
 The run is reproducible by anyone who points any agent at a leased run of this grader.
 
 What this grader does NOT do, stated plainly because the absence is the thing that misleads: it
