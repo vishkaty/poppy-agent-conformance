@@ -153,8 +153,13 @@ export async function conformingLog(keys, over = {}) {
                     // say whether a person or an AI wrote it. A control that omitted either would
                     // make those rules abstain, and a control that abstains proves less than one
                     // that passes.
+                    // A context too, in the formats 8.4 names, so the rule about them is reached
+                    // and passes here rather than abstaining.
                     body: JSON.stringify({ id: "req-" + randomUUID(),
-                                           message: { author: { type: "agent" }, text: "hello" } }),
+                                           message: { author: { type: "agent" }, text: "hello",
+                                                      context: { locale: "en-US",
+                                                                 time_zone: "America/Los_Angeles",
+                                                                 user_available: true } } }),
                     conversationRoute: "start" }),
     request(keys, { ...over, sid, sub, dlgCompact, path: "/poppy/orders/2",
                     token, ath: createHash("sha256").update(token).digest("base64url") }),

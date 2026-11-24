@@ -38,6 +38,12 @@ export const BREACH = {
   // A request carrying the Session header and no Poppy-Version, which 3.4 makes a per-request
   // failure with its own error. The historical rule below is a different breach: two values
   // inside one Session.
+  // A context field in the wrong format. 8.4 names a language tag of RFC 5646, and an underscore
+  // where a hyphen belongs is the mistake a developer actually makes.
+  "conversation.context-fields": async () => [await f.request(keys, {
+    method: "POST", path: "/poppy/conversations", conversationRoute: "start", sub: "user-one",
+    body: JSON.stringify({ id: "r1", message: { author: { type: "agent" }, text: "hello",
+                                                context: { locale: "en_US" } } }) })],
   // One delegated key signing for two Users at one Company, which is what an agent that caches a
   // single delegation per process does. 5.2 names the cost: a leaked key should expose one User.
   "delegation.key-per-user": async () => {

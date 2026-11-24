@@ -91,7 +91,8 @@ test("traffic built by the authors' own signing code passes every check it can r
     await referenceRequest(CTX_A, { ...id, method: "POST", path: "/poppy/conversations",
                                     conversationRoute: "start",
                                     body: JSON.stringify({ id: `ref_${ref.randomId(8)}`,
-                                                           message: { author: { type: "agent" }, text: "hello" } }) }),
+                                                           message: { author: { type: "agent" }, text: "hello",
+                                                                      context: { locale: "en-US", user_available: true } } }) }),
     await referenceRequest(CTX_A, { ...id, path: "/poppy/orders/2", token }),
   ];
   const out = grade(log, CTX_A);

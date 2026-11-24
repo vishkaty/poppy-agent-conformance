@@ -1149,6 +1149,56 @@ export const CHECKS = [
         : PASS(`${usersByKey.size} delegated key(s), each signing for one User at this Company`);
     },
   },
+  {
+    id: "conversation.context-fields",
+    section: "8.4",
+    quote: "When a Personal Agent shares one of these facts, it MUST use the field and format defined here",
+    // 8.4 gives three facts an agent may share and names a format for each: `locale` a language
+    // tag of RFC 5646, `time_zone` an IANA time zone name, `user_available` true or false. The
+    // MUST is on using the field and the format when the fact is shared, so this rule judges only
+    // the fields that are there.
+    //
+    // HOW FAR IT CAN DECIDE, said here and in the verdict rather than implied. A language tag is
+    // checked for well formedness by the runtime, which is the level RFC 5646 defines, so an
+    // unregistered but well formed tag passes. A time zone is checked only for being a name this
+    // runtime accepts, which catches a typo or nonsense and NOT a legacy abbreviation: deciding
+    // that would mean shipping a zone database, and both alternatives here are worse. The
+    // canonical list this runtime offers omits `UTC` and `Asia/Kolkata`, so requiring membership
+    // would fault two obviously valid names, and `PST` canonicalises to exactly what the
+    // legitimate alias `US/Pacific` canonicalises to, so canonicalisation cannot separate them.
+    run(log) {
+      const { messages, posts, unreadable } = agentMessages(log);
+      const shared = messages.filter(({ message }) =>
+        message.context && typeof message.context === "object" && !Array.isArray(message.context)
+        && ["locale", "time_zone", "user_available"].some(k => message.context[k] !== undefined));
+      if (!shared.length)
+        return posts.length && unreadable.length === posts.length
+          ? SKIP(`${unreadable.length} conversation POST(s) arrived with a body this grader did not keep in full`, "grader")
+          : SKIP("no message shared a locale, a time zone or whether the User is available, so 8.4's formats do not apply");
+      const wellFormedTag = (v) => {
+        if (typeof v !== "string") return false;
+        try { Intl.getCanonicalLocales(v); return true; } catch { return false; }
+      };
+      const knownZone = (v) => {
+        if (typeof v !== "string") return false;
+        try { new Intl.DateTimeFormat("en", { timeZone: v }); return true; } catch { return false; }
+      };
+      const bad = [];
+      for (const { r, message } of shared) {
+        const c = message.context;
+        if (c.locale !== undefined && !wellFormedTag(c.locale))
+          bad.push({ r, what: `locale ${JSON.stringify(c.locale)} is not a language tag of RFC 5646` });
+        if (c.time_zone !== undefined && !knownZone(c.time_zone))
+          bad.push({ r, what: `time_zone ${JSON.stringify(c.time_zone)} is not a time zone name` });
+        if (c.user_available !== undefined && typeof c.user_available !== "boolean")
+          bad.push({ r, what: `user_available ${JSON.stringify(c.user_available)} is not true or false` });
+      }
+      return bad.length
+        ? FAIL("a context field is not in the format 8.4 defines for it",
+               bad.slice(0, 3).map(b => b.what), bad.map(b => b.r))
+        : PASS(`${shared.length} message(s) shared a context in the formats 8.4 defines, as far as this grader can decide: a language tag is checked for well formedness and a time zone only for being a name this runtime knows, so a legacy abbreviation passes because nothing here can tell it from an alias`);
+    },
+  },
 ];
 
 // The cross-Company checks. These need logs from BOTH hostnames, and they are the reason

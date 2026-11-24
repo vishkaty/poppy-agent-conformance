@@ -855,3 +855,38 @@ test("the key-per-user rule abstains rather than guessing from what it cannot re
   // And an empty log says nothing.
   assert.equal(grade([], f.ctx).find(x => x.id === id).verdict, "INCONCLUSIVE");
 });
+
+// 8.4's context fields. Item 5 of the coverage map, the first of three small rules.
+test("the context fields are judged by format, and only as far as the runtime can decide", async () => {
+  const keys = await f.agentKeys();
+  const id = "conversation.context-fields";
+  const withContext = async (context) => f.request(keys, {
+    method: "POST", path: "/poppy/conversations", conversationRoute: "start", sub: "user-one",
+    body: JSON.stringify({ id: "r1", message: { author: { type: "agent" }, text: "x", context } }) });
+  const verdict = async (context) => grade([await withContext(context)], f.ctx).find(x => x.id === id);
+
+  assert.equal((await verdict({ locale: "en-US", time_zone: "America/Los_Angeles", user_available: true })).verdict,
+               "PASS", "the shapes 8.4 gives as examples must pass");
+  assert.equal((await verdict({ locale: "en" })).verdict, "PASS", "a bare language is a language tag");
+  assert.equal((await verdict({ locale: "en_US" })).verdict, "FAIL", "an underscore is not RFC 5646");
+  assert.equal((await verdict({ time_zone: "America/LosAngeles" })).verdict, "FAIL", "a typo in a zone name");
+  assert.equal((await verdict({ user_available: "yes" })).verdict, "FAIL", "8.4 says true or false, not a string");
+  assert.equal((await verdict({ user_available: false })).verdict, "PASS");
+  assert.equal((await verdict({ locale: 5 })).verdict, "FAIL", "a number is not a language tag");
+
+  // The limit, stated in the verdict rather than hidden: a legacy abbreviation is not an IANA name,
+  // and this runtime accepts it. Deciding that would mean shipping a zone database, and the
+  // alternatives are worse: the canonical list this runtime offers omits UTC and Asia/Kolkata, and
+  // PST canonicalises exactly like the legitimate alias US/Pacific.
+  const abbreviation = await verdict({ time_zone: "PST" });
+  assert.equal(abbreviation.verdict, "PASS", "an abbreviation passes, because this cannot tell it from an alias");
+  assert.match(abbreviation.why, /abbreviation|cannot tell|as far as/i,
+    `the verdict must say what it did not check: ${abbreviation.why}`);
+
+  // Nothing to judge when the facts are not shared, and other members are not this rule's business.
+  assert.equal((await verdict({ something_else: 1 })).verdict, "INCONCLUSIVE");
+  const noContext = await f.request(keys, { method: "POST", path: "/poppy/conversations",
+                                            conversationRoute: "start", sub: "user-one",
+                                            body: JSON.stringify({ id: "r1", message: { author: { type: "agent" }, text: "x" } }) });
+  assert.equal(grade([noContext], f.ctx).find(x => x.id === id).verdict, "INCONCLUSIVE");
+});
