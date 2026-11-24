@@ -727,3 +727,73 @@ test("two different requests to one bodyless path are not a retry of each other"
   assert.equal(real.verdict, "FAIL",
     `a request resent with the same id after a refusal is the breach: ${real.why}`);
 });
+
+// 3.2, sign-in at a Company that has switched it off. Item 3 of the coverage map. This Company
+// sets `auth.disabled` and lists `refresh_token` as the only grant, so a non-refresh grant here is
+// an agent trying to start a sign-in the Company offers nobody. It already answers
+// `unsupported_grant_type` for one while no rule faulted it.
+const tokenPost = async (keys, params, over = {}) => f.request(keys, {
+  method: "POST", path: "/poppy/token", noSession: true, sub: "user-one",
+  body: new URLSearchParams(params).toString(),
+  headers: { "content-type": "application/x-www-form-urlencoded" },
+  isResource: false, ...over });
+
+test("a sign-in grant at a Company that offers no sign-in is faulted, and a refresh is not", async () => {
+  const keys = await f.agentKeys();
+  const disabled = { ...f.ctx, authDisabled: true };
+  const verdict = async (params) => {
+    const rec = await tokenPost(keys, params);
+    return grade([rec], disabled).find(x => x.id === "signin.not-when-disabled");
+  };
+  for (const grant of ["authorization_code", "urn:ietf:params:oauth:grant-type:device_code",
+                       "https://personalagentprotocol.org/grant/mediated-sign-in"])
+    assert.equal((await verdict({ grant_type: grant, client_id: "x" })).verdict, "FAIL",
+      `${grant} is one of the sign-ins 3.2 forbids here`);
+
+  // 3.2 keeps refresh and revocation working: "Refresh tokens the Company issued earlier keep
+  // working until it revokes them."
+  assert.equal((await verdict({ grant_type: "refresh_token", refresh_token: "t" })).verdict, "PASS",
+    "a refresh is explicitly allowed at a Company with sign-in switched off");
+
+  // A revocation carries no grant_type, so it is not a token request to judge.
+  const revoke = await tokenPost(keys, { token: "t" }, { path: "/poppy/revoke" });
+  assert.equal(grade([revoke], disabled).find(x => x.id === "signin.not-when-disabled").verdict,
+               "INCONCLUSIVE", "a revocation is not a sign-in attempt");
+});
+
+test("the sign-in rule says nothing unless it knows the Company offers no sign-in", async () => {
+  const keys = await f.agentKeys();
+  const signIn = await tokenPost(keys, { grant_type: "authorization_code", client_id: "x" });
+  const id = "signin.not-when-disabled";
+
+  // A Company that DOES offer sign-in: the sentence does not bind there, so this is not a verdict
+  // about the agent at all.
+  const offers = grade([signIn], { ...f.ctx, authDisabled: false }).find(x => x.id === id);
+  assert.equal(offers.verdict, "INCONCLUSIVE", `an agent was faulted at a Company that offers sign-in: ${offers.why}`);
+  assert.equal(offers.cause, "grader");
+
+  // And a log judged without being told either way must not guess. The context is built here
+  // rather than borrowed from the fixture, which now says the Company offers no sign-in: a test
+  // that relies on a fixture leaving a field out breaks the moment the fixture gains it.
+  const untold = grade([signIn], { identifier: f.ctx.identifier, domain: f.ctx.domain })
+    .find(x => x.id === id);
+  assert.equal(untold.verdict, "INCONCLUSIVE", `this grader guessed: ${untold.why}`);
+  assert.equal(untold.cause, "grader");
+
+  // A JSON body that merely contains the words must not be read as a token request.
+  const api = await f.request(keys, { method: "POST", path: "/poppy/orders",
+                                      body: JSON.stringify({ note: "grant_type=authorization_code" }) });
+  assert.equal(grade([api], { ...f.ctx, authDisabled: true }).find(x => x.id === id).verdict,
+               "INCONCLUSIVE", "a JSON API body is not a form-encoded token request");
+
+  // The case that actually discriminates, found by a mutation that survived without it: a body
+  // that WOULD parse as a form, on a request that is not form encoded. RFC 6749 makes a token
+  // request form encoded, so the content type is part of what makes a grant a grant, and a rule
+  // that read any body would fault an API call whose text happens to look like one.
+  const looksLikeOne = await f.request(keys, { method: "POST", path: "/poppy/orders",
+                                               headers: { "content-type": "application/json" },
+                                               body: "grant_type=authorization_code&code=x" });
+  const v = grade([looksLikeOne], { ...f.ctx, authDisabled: true }).find(x => x.id === id);
+  assert.equal(v.verdict, "INCONCLUSIVE",
+    `a request that is not form encoded was read as a token request: ${v.why}`);
+});

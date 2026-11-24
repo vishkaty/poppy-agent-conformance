@@ -9,7 +9,7 @@ Personal Agent puts on the wire, which only the Company it is talking to can see
 
 ## What it does
 
-Thirty two checks over a recorded request log. Thirty need one Company. Two need
+Thirty three checks over a recorded request log. Thirty one need one Company. Two need
 two Companies, because the rules they test are pairwise: a User ID must differ per Company
 (spec 5.1) and a delegated key must sign for one User ID only (spec 5.2), so no single
 Company can observe either.
@@ -37,9 +37,11 @@ that resends a request this Company refused, and is refused again for the same r
 under section 7. The rest of the recovery the specification prescribes is still unchecked, and the
 paths this Company never triggers, `session_ended`, a 429 and an exhausted cursor among them,
 cannot be checked here at all. Nothing reads
-`Poppy-Extensions` or an operator signature. And nothing in sections 4, 6 or 9, nor in any
-extension, can be reached at all by a Company that sets `auth.disabled`, serves no website and
-answers its tasks endpoint with `{ok: true}`, which is what this one does. A reader should take
+`Poppy-Extensions` or an operator signature. One rule reaches into section 4's territory from the other
+side: an agent that sends a sign-in grant to the token endpoint of a Company that offers no
+sign-in is faulted under 3.2. Beyond that, nothing in sections 4, 6 or 9, nor in any extension,
+can be reached by a Company that sets `auth.disabled`, serves no website and answers its tasks
+endpoint with `{ok: true}`, which is what this one does. A reader should take
 the rule list as the claim and this paragraph as its boundary, rather than reading twenty nine
 rules as twenty nine out of thirty.
 
@@ -160,15 +162,16 @@ Session. Telling an agent the wrong one sends it into a loop.
 instruction to `invalid_session`, and this Company ends no Session and holds no account, so no
 failure here can be one.
 
-Eleven rules are reported and never refused, each with its reason in `enforce.mjs`: the three that
+Twelve rules are reported and never refused, each with its reason in `enforce.mjs`: the three that
 need more than one request to decide, the one about documents, the two privacy rules, which are
 the most contestable accusations this grader makes and so are never used to close a door, the
 request id of 8.3, the id alphabet of 8.2 and a message with no content under 8.4, whose answers
 8.13 puts under `invalid_request` while this path speaks `invalid_session` only, so the
 conversation handler answers those instead, the message author of 8.8, which 8.13 does not ask a
-Company to refuse at all, so this Company serves it and the rule reports it, and the retry rule of
-section 7, which is about a request sent again AFTER a refusal and so cannot be decided from the
-single request in front of this path. The count was wrong
+Company to refuse at all, so this Company serves it and the rule reports it, the retry rule of section 7, which is about a
+request sent again AFTER a refusal and so cannot be decided from the single request in front of
+this path, and the sign-in rule of 3.2, for which the token endpoint already answers
+`unsupported_grant_type` as its own metadata requires. The count was wrong
 here twice and the list beside it once, which is why a test derives the count and the paragraph
 names every rule it covers.
 
@@ -664,7 +667,7 @@ than a citation.
 
 Early, and honest about what has been measured.
 
-Thirty two rules, and 129 mutations that each break one guard and require a named test
+Thirty three rules, and 133 mutations that each break one guard and require a named test
 to notice. The test count is deliberately not quoted here: it went stale twice in one day, and
 `npm test` prints it. It has been run against synthetic traffic, against traffic minted by the
 authors own signing code, and end to end through a tunnel at a real hostname on 443. That last
@@ -672,10 +675,12 @@ one is not a past event. Every lease is preceded by a control in which this grad
 itself with the authors own signing code, including one leg through the public hostname, and
 refuses to grade at all unless every rule that control exercises passes. On a deployment that
 verifies delegations, which the live one does, the control covers thirty of the thirty
-two rules. The two it cannot exercise are `session.ath`, because this grader issues no access
-tokens so a conforming agent sends no `ath` here, and `session.stops-after-refusal`, because the
-control is conforming traffic and this Company refuses none of it, so there is no refusal for it
-to stop sending after. Each is judged only for a builder whose own run reaches it.
+three rules. The three it cannot exercise are all rules a conforming agent never reaches here:
+`session.ath`, because this grader issues no access tokens so there is no `ath` to send;
+`session.stops-after-refusal`, because the control is conforming traffic and this Company refuses
+none of it, so there is no refusal to stop sending after; and `signin.not-when-disabled`, because
+the control sends no token request at all, this Company issuing no tokens. Each is judged only
+for a builder whose own run reaches it.
 
 It has been run against agents nobody here wrote: the authors own kit validator, acting as a
 Personal Agent, which had every breach it deliberately sent caught, and three Personal Agent

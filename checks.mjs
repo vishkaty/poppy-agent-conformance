@@ -1066,6 +1066,49 @@ export const CHECKS = [
         : PASS(`${refused.length} request(s) were refused and none carrying a request id was sent again to be refused for the same reason`);
     },
   },
+  {
+    id: "signin.not-when-disabled",
+    section: "3.2",
+    quote: "A Personal Agent MUST NOT start Direct, Device, or Mediated Sign-In with a Company that sets it.",
+    // Item 3 of the coverage map. This Company sets `auth.disabled` and lists `refresh_token` as
+    // its only grant, and it already answers `unsupported_grant_type` for anything else while no
+    // rule faulted it, which is the status versus verdict disagreement this grader exists to
+    // prevent.
+    //
+    // What identifies a sign-in on the wire is the grant. RFC 6749 puts `grant_type` in a
+    // form-encoded token request and nowhere else, so a form body carrying one is a token request
+    // by construction, and no endpoint has to be named for this rule to see it. 3.2 keeps two
+    // things working at such a Company, "Refresh tokens the Company issued earlier keep working
+    // until it revokes them", so a `refresh_token` grant passes and a revocation, which carries no
+    // grant at all, is not a token request to judge.
+    //
+    // It abstains unless it was TOLD the Company offers no sign-in. At a Company that does offer
+    // it the sentence does not bind, and a grader that assumed either way would accuse an agent
+    // for using a flow its Company published. The cause is ours because the gap is in what this
+    // grader knows about the Company, not in what the agent did.
+    run(log, ctx) {
+      if (ctx?.authDisabled !== true)
+        return SKIP(ctx?.authDisabled === false
+          ? "this Company offers sign-in, so 3.2's prohibition does not bind an agent here"
+          : "this grader was not told whether this Company offers sign-in, so it cannot say whether 3.2 binds here", "grader");
+      const isForm = (r) => /application\/x-www-form-urlencoded/i.test(String(r.headers?.["content-type"] ?? ""));
+      const grants = [];
+      for (const r of log) {
+        if (r.method !== "POST" || !isForm(r)) continue;
+        if (r.bodyComplete === false || r.bodyTruncated) continue;
+        const grant = new URLSearchParams(r.body ?? "").get("grant_type");
+        if (grant) grants.push({ r, grant });
+      }
+      if (!grants.length)
+        return SKIP("the agent sent no token request to this Company, so it started no sign-in here");
+      const signIn = grants.filter(({ grant }) => grant !== "refresh_token");
+      return signIn.length
+        ? FAIL("the agent tried to start a sign-in at a Company that offers none, which 3.2 forbids",
+               signIn.slice(0, 3).map(({ r, grant }) => `${r.method} ${r.path}: grant_type ${grant}`),
+               signIn.map(({ r }) => r))
+        : PASS(`${grants.length} token request(s), all of them refreshes, which 3.2 keeps working at a Company with sign-in switched off`);
+    },
+  },
 ];
 
 // The cross-Company checks. These need logs from BOTH hostnames, and they are the reason

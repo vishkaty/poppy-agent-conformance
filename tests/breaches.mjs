@@ -38,6 +38,12 @@ export const BREACH = {
   // A request carrying the Session header and no Poppy-Version, which 3.4 makes a per-request
   // failure with its own error. The historical rule below is a different breach: two values
   // inside one Session.
+  // A sign-in grant at a Company that offers none. 3.2 forbids starting Direct, Device or
+  // Mediated Sign-In there, and the grant is what identifies the attempt on the wire.
+  "signin.not-when-disabled": async () => [await f.request(keys, {
+    method: "POST", path: "/poppy/token", noSession: true, sub: "user-one", isResource: false,
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: "grant_type=authorization_code&code=abc&client_id=https%3A%2F%2Fagent.example%2Fagent.json" })],
   // A request refused with invalid_session and then sent again, to be refused by the same rule.
   // Section 7 tells an agent to stop until it fixes the cause, and says a new Session is not a fix.
   "session.stops-after-refusal": async () => {
@@ -174,4 +180,15 @@ export const BREACH = {
 export const CONFORMING_UNREACHED = {
   "session.stops-after-refusal":
     "it judges what an agent does after this Company refuses a request under a rule, and conforming traffic is never refused, so there is no refusal for the control to stop sending after",
+};
+
+// The same idea for the OTHER control, the one built entirely by the protocol authors own signing
+// code. It is a different body of traffic and reaches a different set of rules: it mints Session
+// JWTs and sends no token request at all, so the sign-in rule has no grant to judge there, while
+// the conforming log above does send a refresh and reaches it. Two lists rather than one, because
+// a shared list would have to claim a rule is unreachable in traffic that reaches it.
+export const REFERENCE_UNREACHED = {
+  ...CONFORMING_UNREACHED,
+  "signin.not-when-disabled":
+    "this control is Session traffic built with the authors own helpers and sends no token request, so there is no grant for 3.2's prohibition to be judged on",
 };

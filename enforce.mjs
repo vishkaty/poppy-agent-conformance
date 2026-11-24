@@ -64,6 +64,7 @@ export const ENFORCE_EXCLUDED = {
   // `invalid_session` and `version_unsupported` only, so refusing from here would answer the
   // wrong error for the breach; the conversation handler already answers it where the
   // specification does.
+  "signin.not-when-disabled": "this Company already answers `unsupported_grant_type` for a grant it does not list, which RFC 6749 and its own metadata require of it, and this path answers `invalid_session` or `version_unsupported` only. Enforcing it here would name the wrong error for a request the token endpoint has already turned down.",
   "session.stops-after-refusal": "it needs more than one request to decide: the breach is a request sent AGAIN after this Company refused it, and enforcement grades the single request in front of it. The refusal it is about has already happened by then.",
   "conversation.message-content": "8.13 lists a message with no content (8.4) under `invalid_request`, and this path answers `invalid_session` or `version_unsupported` only, so enforcing it here would name the wrong error. The conversation handler already refuses it where the specification puts it.",
   "conversation.message-author": "8.13 does not ask a Company to refuse a message that fails to say whether a person or an AI wrote it, so this Company serves it and the rule reports it. Refusing where the specification does not would make this grader stricter than the text.",

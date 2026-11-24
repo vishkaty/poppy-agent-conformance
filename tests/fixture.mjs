@@ -84,6 +84,10 @@ export async function request(keys, over = {}) {
       "poppy-session": over.noSession ? undefined : jwt,
       "poppy-version": over.version === null ? undefined : (over.version ?? "1.0"),
       ...(over.token ? { authorization: `DPoP ${over.token}` } : {}),
+      // Merged last, so a test can set a content type or any other header. It could not before,
+      // and a rule that reads one then saw nothing: the THIRD field this fixture silently dropped
+      // while the test that depended on it read as though it had been set.
+      ...(over.headers ?? {}),
     },
     body: over.body ?? "",
     conversationRoute: over.conversationRoute ?? null,
@@ -125,8 +129,20 @@ export async function conformingLog(keys, over = {}) {
     headers: {}, body: null, sessionHeaderCount: 0, sessionHeaderDecodable: false,
     sessionHeaderDuplicated: false,
   };
+  // A refresh at a Company with sign-in switched off, which 3.2 explicitly keeps working:
+  // "Refresh tokens the Company issued earlier keep working until it revokes them." It carries no
+  // Session header, because 5.2 says OAuth endpoints do not, and it gives the sign-in rule
+  // something to pass on instead of abstaining.
+  const refresh = {
+    host: DOMAIN, method: "POST", path: "/poppy/token", url: ORIGIN + "/poppy/token",
+    at: Math.floor(Date.now() / 1000), isResource: false, isPage: false, mustNotCarry: true,
+    classifiedAs: "a discovery or description document, or an OAuth endpoint (5.2)",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: "grant_type=refresh_token&refresh_token=rt_example", bodyComplete: true,
+    sessionHeaderCount: 0, sessionHeaderDecodable: false, sessionHeaderDuplicated: false,
+  };
   return Promise.all([
-    discovery,
+    discovery, refresh,
     request(keys, { ...over, sid, sub, dlgCompact, path: "/poppy/orders" }),
     request(keys, { ...over, sid, sub, dlgCompact, path: "/poppy/orders/1" }),
     // 8.3: "Every `POST` body has an `id`, chosen by the Personal Agent". A conforming agent
@@ -145,5 +161,8 @@ export async function conformingLog(keys, over = {}) {
   ]);
 }
 
-export const ctx = { identifier: IDENTIFIER, domain: DOMAIN };
+// The Company these fixtures describe, which sets `auth.disabled` exactly as the deployed one
+// does. A rule that asks whether sign-in is offered has to be told, and a ctx that left it out
+// made such a rule abstain here while the deployment judged it.
+export const ctx = { identifier: IDENTIFIER, domain: DOMAIN, authDisabled: true };
 export const athOf = t => createHash("sha256").update(t).digest("base64url");

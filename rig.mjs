@@ -55,6 +55,8 @@ export const CANARY_ABSTAINS = {
   "delegation.signature": "grader",
 };
 export const CANARY_EXCLUDED = {
+  "signin.not-when-disabled": "the canary never sends a token request, because this Company issues no tokens and 3.2 forbids an agent to start a sign-in here at all. The rule is judged only for a builder whose agent sends a grant to the token endpoint.",
+
   "session.stops-after-refusal": "the canary is conforming traffic and this Company refuses none of it, so there is no refusal for the control to stop sending after. The rule is judged only for a builder whose request this Company actually refused under a rule.",
 
   "session.ath": "This grader issues no access tokens, so the canary has none to bind and a "
@@ -71,7 +73,10 @@ const realNow = () => Math.floor(Date.now() / 1000);
 // taking the canary's expectations from the published document makes a disagreement between
 // the two visible instead of self-confirming.
 function ctxOf(discovery) {
-  return { identifier: discovery?.auth?.issuer, domain: discovery?.organization?.domain };
+  return { identifier: discovery?.auth?.issuer, domain: discovery?.organization?.domain,
+           // 3.2's prohibition on starting a sign-in binds only where a Company offers none, so
+           // the rule about it is told rather than left to guess.
+           authDisabled: discovery?.auth?.disabled === true };
 }
 const publicOriginOf = d => { try { return new URL(d.auth.issuer).origin; } catch { return null; } };
 

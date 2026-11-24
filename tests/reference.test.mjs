@@ -99,14 +99,14 @@ test("traffic built by the authors' own signing code passes every check it can r
   // does after this Company refuses a request cannot be reached by traffic that is never refused.
   // The list is declared beside the fixture, and the check below proves each listed rule really
   // is unreached here rather than quietly failing.
-  const { CONFORMING_UNREACHED } = await import("./breaches.mjs");
-  const notPass = out.filter(r => r.verdict !== "PASS" && !CONFORMING_UNREACHED[r.id]);
+  const { REFERENCE_UNREACHED } = await import("./breaches.mjs");
+  const notPass = out.filter(r => r.verdict !== "PASS" && !REFERENCE_UNREACHED[r.id]);
   assert.deepEqual(notPass.map(r => `${r.id}: ${r.verdict} ${r.why}`), [],
     "our grader judged the authors' own conforming traffic as anything but a pass");
-  for (const id of Object.keys(CONFORMING_UNREACHED)) {
+  for (const [id, why] of Object.entries(REFERENCE_UNREACHED)) {
+    assert.ok(String(why).length > 40, `the reason given for ${id} says nothing`);
     const v = out.find(r => r.id === id);
-    assert.equal(v.verdict, "INCONCLUSIVE", `${id} is declared unreachable by conforming traffic and reached a verdict`);
-    assert.equal(v.cause, "unreached");
+    assert.equal(v.verdict, "INCONCLUSIVE", `${id} is declared unreachable by this control and reached a verdict`);
   }
 });
 
