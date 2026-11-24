@@ -1019,12 +1019,22 @@ export const CHECKS = [
     // classic client bug. Section 7 says what an agent does with `invalid_session`: it stops
     // sending that request until it fixes the cause, and a fresh Session does not count as a fix.
     //
-    // The accusation is kept narrow enough to be uncontestable. It needs the SAME request, by
-    // method, URL and body, refused AGAIN by the SAME rule. An agent that fixed one cause and
-    // tripped another changed something, which is what it was asked to do; a different request
-    // that fails the same rule is not a retry; and a resend that was accepted proves nothing
-    // about the agent. Bodies are compared as bytes rather than canonically, which lets an agent
-    // that re-serialises escape: under-reach is the right direction for a public grader.
+    // WHAT COUNTS AS THE SAME REQUEST, and the first version of this rule got it wrong in
+    // production. It compared method, URL and body, which made every bodyless GET to one path
+    // identical to every other, so the authors own validator, which sends many different
+    // deliberately broken probes to `GET /poppy/orders`, was accused of retrying when it had
+    // retried nothing. On the wire "the same request sent again" is not decidable for a request
+    // with no body: a conforming retry carries a fresh Session JWT, so it looks exactly like a
+    // second unrelated probe.
+    //
+    // 8.3 supplies the only identity the protocol defines: "To retry a request, the Personal
+    // Agent sends it again to the same path with the same ID." So this rule judges requests that
+    // carry a request id, by path and id, and says nothing about requests that carry none. That
+    // is narrow, and narrow is the right direction: a public grader should miss a retry rather
+    // than invent one.
+    //
+    // An agent that fixed one cause and tripped another changed something, which is what it was
+    // asked to do; a resend that was accepted proves nothing about the agent.
     //
     // Only refusals carrying a RULE count. This Company also answers 400 `invalid_session` on a
     // conversation route when it could not verify a delegation for its own reasons, and that
@@ -1034,20 +1044,26 @@ export const CHECKS = [
       const refused = log.filter(r => r.rejection?.error === "invalid_session" && r.rejection?.rule);
       if (!refused.length)
         return SKIP("this Company refused nothing under a rule, so the agent was never told to stop sending anything");
-      const shapeOf = (r) => `${r.method} ${htuOf(r) ?? r.path} ${r.body ?? ""}`;
-      const whole = (r) => r.bodyComplete !== false && !r.bodyTruncated;
+      // Identity by path and request id, which is what 8.3 defines a retry as.
+      const idOf = (r) => {
+        if (r.bodyComplete === false || r.bodyTruncated) return null;
+        let parsed = null;
+        try { parsed = JSON.parse(r.body ?? ""); } catch { return null; }
+        return typeof parsed?.id === "string" && parsed.id !== "" ? `${r.path}\u0000${parsed.id}` : null;
+      };
       const resent = [];
       for (const r of refused) {
-        if (!whole(r)) continue;                      // we cannot say what request it was
-        const later = log.filter(x => x !== r && (x.seq ?? 0) > (r.seq ?? 0) && whole(x)
-                                      && shapeOf(x) === shapeOf(r)
+        const key = idOf(r);
+        if (!key) continue;                 // nothing identifies this request, so nothing is a retry of it
+        const later = log.filter(x => x !== r && (x.seq ?? 0) > (r.seq ?? 0)
+                                      && idOf(x) === key
                                       && x.rejection?.rule === r.rejection.rule);
         if (later.length) resent.push(...later);
       }
       return resent.length
         ? FAIL("a request refused with invalid_session was sent again and refused for the same reason, which section 7 tells an agent not to do",
                resent.slice(0, 3).map(r => `${r.method} ${r.path} refused again under ${r.rejection.rule}`), resent)
-        : PASS(`${refused.length} request(s) were refused and none was sent again to be refused for the same reason`);
+        : PASS(`${refused.length} request(s) were refused and none carrying a request id was sent again to be refused for the same reason`);
     },
   },
 ];

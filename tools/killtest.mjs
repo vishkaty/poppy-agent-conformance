@@ -349,8 +349,14 @@ export const MUTATIONS = [
     find: "        if (later.length) resent.push(...later);", to: "" },
   { id: "checks/retry-counts-any-later-request", file: "checks.mjs", tests: "tests/checks.test.mjs",
     kills: "resends a request it was told to stop sending is faulted",
-    find: "                                      && shapeOf(x) === shapeOf(r)\n                                      && x.rejection?.rule === r.rejection.rule);",
+    find: "                                      && idOf(x) === key\n                                      && x.rejection?.rule === r.rejection.rule);",
     to: ");" },
+  // The false positive this rule shipped with: identity by method, URL and body made every
+  // bodyless GET to one path a retry of every other.
+  { id: "checks/retry-identity-ignores-the-id", file: "checks.mjs", tests: "tests/checks.test.mjs",
+    kills: "are not a retry of each other",
+    find: "        try { parsed = JSON.parse(r.body ?? \"\"); } catch { return null; }",
+    to: "        try { parsed = JSON.parse(r.body ?? \"\"); } catch { return `${r.method} ${r.path}`; }" },
   { id: "checks/retry-counts-our-own-refusal", file: "checks.mjs", tests: "tests/checks.test.mjs",
     kills: "abstains unless this Company actually refused something under a rule",
     find: "      const refused = log.filter(r => r.rejection?.error === \"invalid_session\" && r.rejection?.rule);",

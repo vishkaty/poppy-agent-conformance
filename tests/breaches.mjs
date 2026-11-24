@@ -41,10 +41,16 @@ export const BREACH = {
   // A request refused with invalid_session and then sent again, to be refused by the same rule.
   // Section 7 tells an agent to stop until it fixes the cause, and says a new Session is not a fix.
   "session.stops-after-refusal": async () => {
+    // 8.3: "To retry a request, the Personal Agent sends it again to the same path with the same
+    // ID", so the breach is the same path and the same request id, refused twice over. A bodyless
+    // GET cannot express it: two of those to one path are indistinguishable from each other.
     const refused = { rejection: { rule: "session.alg", error: "invalid_session" },
                       response: { status: 400, error: "invalid_session" } };
-    return [await f.request(keys, { path: "/poppy/orders", sub: "user-one", seq: 1, at: 1, ...refused }),
-            await f.request(keys, { path: "/poppy/orders", sub: "user-one", seq: 2, at: 2, ...refused })];
+    const body = JSON.stringify({ id: "r1", message: { author: { type: "agent" }, text: "hello" } });
+    const post = (seq) => f.request(keys, { method: "POST", path: "/poppy/conversations", body,
+                                            conversationRoute: "start", sub: "user-one",
+                                            seq, at: seq, ...refused });
+    return [await post(1), await post(2)];
   },
   // A message with none of the four content fields. This Company already answers
   // `invalid_request` for it, as 8.13 says, so a rule had to fault it too.

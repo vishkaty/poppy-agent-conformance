@@ -635,36 +635,39 @@ test("neither message rule accuses an agent over a request this grader could not
 // Section 7, the retry rule. Item 2 of the coverage map. A refusal is only useful if the agent
 // acts on it, and a retry loop after a 400 is a classic client bug.
 test("an agent that resends a request it was told to stop sending is faulted", async () => {
+  // 8.3 defines a retry as the same path with the same request id, and that is the only identity
+  // this rule uses. See the test below for the false positive that taught it.
   const keys = await f.agentKeys();
-  const req = async (over = {}) => f.request(keys, { path: "/poppy/orders", sub: "user-one", ...over });
-  const verdict = (log) => grade(log, f.ctx).find(x => x.id === "session.stops-after-refusal");
   const refusedBy = (rule) => ({ rejection: { rule, error: "invalid_session" },
                                  response: { status: 400, error: "invalid_session" } });
+  const bodyWith = (id) => JSON.stringify({ id, message: { author: { type: "agent" }, text: "x" } });
+  const post = async (over = {}) => f.request(keys, {
+    method: "POST", path: "/poppy/conversations", conversationRoute: "start", sub: "user-one",
+    body: bodyWith("r1"), ...over });
+  const verdict = (log) => grade(log, f.ctx).find(x => x.id === "session.stops-after-refusal");
 
-  // The breach: the same request, refused again by the same rule.
-  const first = await req({ seq: 1, at: 1, ...refusedBy("session.alg") });
-  const again = await req({ seq: 2, at: 2, ...refusedBy("session.alg") });
+  const first = await post({ seq: 1, at: 1, ...refusedBy("session.alg") });
+  const again = await post({ seq: 2, at: 2, ...refusedBy("session.alg") });
   assert.equal(verdict([first, again]).verdict, "FAIL",
-    "a request resent after invalid_session and refused by the same rule is the breach section 7 names");
+    "the same path and id, refused again by the same rule, is the breach section 7 names");
 
-  // Refused once and not resent: nothing to fault.
+  // Refused once and not resent.
   assert.equal(verdict([first]).verdict, "PASS");
 
-  // A DIFFERENT request that fails the same rule is not a resend of the first.
-  const other = await req({ seq: 2, at: 2, path: "/poppy/orders/1", ...refusedBy("session.alg") });
-  assert.equal(verdict([first, other]).verdict, "PASS", "a different request is not a retry");
+  // A different request id is a different request, not a retry of the first.
+  const other = await post({ seq: 2, at: 2, body: bodyWith("r2"), ...refusedBy("session.alg") });
+  assert.equal(verdict([first, other]).verdict, "PASS", "a different request id is not a retry");
 
   // The same request refused by a DIFFERENT rule means the agent changed something, which is
   // exactly what section 7 asks of it.
-  const fixedOne = await req({ seq: 2, at: 2, ...refusedBy("session.aud") });
+  const fixedOne = await post({ seq: 2, at: 2, ...refusedBy("session.aud") });
   assert.equal(verdict([first, fixedOne]).verdict, "PASS",
     "an agent that fixed one cause and tripped another did what it was told");
 
-  // And the same request accepted the second time is not a breach we can prove.
-  const accepted = await req({ seq: 2, at: 2, response: { status: 200, error: null } });
+  // And a resend that was accepted proves nothing about the agent.
+  const accepted = await post({ seq: 2, at: 2, response: { status: 201, error: null } });
   assert.equal(verdict([first, accepted]).verdict, "PASS");
 });
-
 test("the retry rule abstains unless this Company actually refused something under a rule", async () => {
   const keys = await f.agentKeys();
   const verdict = (log) => grade(log, f.ctx).find(x => x.id === "session.stops-after-refusal");
@@ -690,4 +693,37 @@ test("the retry rule abstains unless this Company actually refused something und
   const v = verdict([ours, resent]);
   assert.equal(v.verdict, "INCONCLUSIVE",
     `an agent was faulted for resending after a refusal that was ours: ${v.why}`);
+});
+
+test("two different requests to one bodyless path are not a retry of each other", async () => {
+  // A FALSE POSITIVE this rule shipped with, found by running the control against the authors own
+  // validator an hour after deploying it. Their validator sends many DIFFERENT breaching probes to
+  // the same `GET /poppy/orders`, each with its own deliberately broken Session JWT and no body at
+  // all. Compared by method, URL and body, those probes are indistinguishable from one another, so
+  // the rule called them retries and faulted an agent that had retried nothing.
+  //
+  // On the wire, "the same request sent again" is not decidable for a request with no body: a
+  // conforming retry and a second unrelated probe look alike, because a retry legitimately carries
+  // a fresh Session JWT. The protocol supplies the only reliable identity, in 8.3: "To retry a
+  // request, the Personal Agent sends it again to the same path with the same ID." So the rule
+  // judges requests that carry a request id, and says nothing about the rest.
+  const keys = await f.agentKeys();
+  const refusedBy = (rule) => ({ rejection: { rule, error: "invalid_session" },
+                                 response: { status: 400, error: "invalid_session" } });
+  const probe = (seq) => f.request(keys, { path: "/poppy/orders", sub: "user-one", seq, at: seq,
+                                           ...refusedBy("session.signature") });
+  const v = grade([await probe(1), await probe(2)], f.ctx)
+    .find(x => x.id === "session.stops-after-refusal");
+  assert.notEqual(v.verdict, "FAIL",
+    `two bodyless probes to one path were called a retry: ${v.why}`);
+
+  // And the breach it does fault: the same path with the same request id, refused twice over.
+  const body = JSON.stringify({ id: "r1", message: { author: { type: "agent" }, text: "x" } });
+  const post = (seq) => f.request(keys, { method: "POST", path: "/poppy/conversations", seq, at: seq,
+                                          conversationRoute: "start", sub: "user-one", body,
+                                          ...refusedBy("session.alg") });
+  const real = grade([await post(1), await post(2)], f.ctx)
+    .find(x => x.id === "session.stops-after-refusal");
+  assert.equal(real.verdict, "FAIL",
+    `a request resent with the same id after a refusal is the breach: ${real.why}`);
 });
