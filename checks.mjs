@@ -1011,6 +1011,45 @@ export const CHECKS = [
         : PASS(`${messages.length} message(s) each said agent or human. Which of the two is truthful is not decidable from the wire, because this Company never sees the User's own words`);
     },
   },
+  {
+    id: "session.stops-after-refusal",
+    section: "7",
+    quote: "A new Session doesn't fix it: the Personal Agent stops sending the request until it fixes the cause",
+    // A refusal is only worth anything if the agent acts on it, and a retry loop after a 400 is a
+    // classic client bug. Section 7 says what an agent does with `invalid_session`: it stops
+    // sending that request until it fixes the cause, and a fresh Session does not count as a fix.
+    //
+    // The accusation is kept narrow enough to be uncontestable. It needs the SAME request, by
+    // method, URL and body, refused AGAIN by the SAME rule. An agent that fixed one cause and
+    // tripped another changed something, which is what it was asked to do; a different request
+    // that fails the same rule is not a retry; and a resend that was accepted proves nothing
+    // about the agent. Bodies are compared as bytes rather than canonically, which lets an agent
+    // that re-serialises escape: under-reach is the right direction for a public grader.
+    //
+    // Only refusals carrying a RULE count. This Company also answers 400 `invalid_session` on a
+    // conversation route when it could not verify a delegation for its own reasons, and that
+    // answer sets no `rejection`, so it cannot start this rule's clock. An agent resending after
+    // our own fetch failure would otherwise be faulted for our problem.
+    run(log) {
+      const refused = log.filter(r => r.rejection?.error === "invalid_session" && r.rejection?.rule);
+      if (!refused.length)
+        return SKIP("this Company refused nothing under a rule, so the agent was never told to stop sending anything");
+      const shapeOf = (r) => `${r.method} ${htuOf(r) ?? r.path} ${r.body ?? ""}`;
+      const whole = (r) => r.bodyComplete !== false && !r.bodyTruncated;
+      const resent = [];
+      for (const r of refused) {
+        if (!whole(r)) continue;                      // we cannot say what request it was
+        const later = log.filter(x => x !== r && (x.seq ?? 0) > (r.seq ?? 0) && whole(x)
+                                      && shapeOf(x) === shapeOf(r)
+                                      && x.rejection?.rule === r.rejection.rule);
+        if (later.length) resent.push(...later);
+      }
+      return resent.length
+        ? FAIL("a request refused with invalid_session was sent again and refused for the same reason, which section 7 tells an agent not to do",
+               resent.slice(0, 3).map(r => `${r.method} ${r.path} refused again under ${r.rejection.rule}`), resent)
+        : PASS(`${refused.length} request(s) were refused and none was sent again to be refused for the same reason`);
+    },
+  },
 ];
 
 // The cross-Company checks. These need logs from BOTH hostnames, and they are the reason

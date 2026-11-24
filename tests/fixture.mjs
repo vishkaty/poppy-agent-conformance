@@ -95,6 +95,12 @@ export async function request(keys, over = {}) {
     ...(over.bodyTruncated !== undefined ? { bodyTruncated: over.bodyTruncated } : {}),
     ...(over.unsafeTarget !== undefined ? { unsafeTarget: over.unsafeTarget } : {}),
     ...(over.refused !== undefined ? { refused: over.refused } : {}),
+    // `seq` is how the report and the history rules order a log, and it was the one field a test
+    // could ask for and silently not get. A rule that looks for a LATER request then found none,
+    // every time, and passed.
+    ...(over.seq !== undefined ? { seq: over.seq } : {}),
+    ...(over.rejection !== undefined ? { rejection: over.rejection } : {}),
+    ...(over.response !== undefined ? { response: over.response } : {}),
     ...(over.isResource !== undefined ? { isResource: over.isResource } : {}),
     issuerKeys: issuerKeysFor(keys, over),
   };

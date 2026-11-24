@@ -133,8 +133,13 @@ test("the README states the real coverage of the control that gates every lease"
   const covered = CANARY_RULES.length + Object.keys(CANARY_ABSTAINS).length;
   assert.ok(readme.includes(`${spell(covered)} of the ${spell(total)} rules`),
     `the README does not say "${spell(covered)} of the ${spell(total)} rules" for the control's coverage`);
-  for (const id of ["session.ath"])
-    assert.ok(readme.includes(id), `the README does not name ${id}, the rule the control cannot exercise`);
+  // Every rule the control cannot exercise, not a hand written list of one: the paragraph said
+  // "the one it cannot exercise" while a second was being added, and a hard coded id would have
+  // let that pass.
+  const { CANARY_EXCLUDED } = await import("../rig.mjs");
+  for (const id of Object.keys(CANARY_EXCLUDED))
+    assert.ok(readme.includes(id),
+      `the README does not name ${id}, which the control cannot exercise`);
 });
 
 test("the README states the real number of rules that are reported and never refused", async () => {

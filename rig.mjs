@@ -55,6 +55,8 @@ export const CANARY_ABSTAINS = {
   "delegation.signature": "grader",
 };
 export const CANARY_EXCLUDED = {
+  "session.stops-after-refusal": "the canary is conforming traffic and this Company refuses none of it, so there is no refusal for the control to stop sending after. The rule is judged only for a builder whose request this Company actually refused under a rule.",
+
   "session.ath": "This grader issues no access tokens, so the canary has none to bind and a "
     + "conforming agent would send no ath here. The rule is judged only for a builder who "
     + "points a signed-in code path at it with a token of their own.",

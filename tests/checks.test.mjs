@@ -23,11 +23,28 @@ test("every check has a deliberate breach, so none can be a green light by omiss
   assert.deepEqual(extra, [], "breaches naming checks that do not exist");
 });
 
-test("a conforming agent passes every check", () => {
+test("a conforming agent passes every check it can reach, and the rest are declared", async () => {
+  // The control: if a conforming log does not pass, every FAIL below is meaningless. It used to
+  // require a PASS from every rule, which held while every rule was about a request an agent
+  // sends. A rule about what an agent does AFTER a refusal cannot be reached by traffic that is
+  // never refused, so those are declared in breaches.mjs with a reason, and the declaration is
+  // itself checked: a listed rule must really be unreached, and the cause must be the agent not
+  // reaching it rather than this grader failing to judge.
+  const { CONFORMING_UNREACHED } = await import("./breaches.mjs");
   const out = grade(conforming, f.ctx);
-  const notPass = out.filter(r => r.verdict !== "PASS");
+  const ids = out.map(r => r.id);
+  for (const id of Object.keys(CONFORMING_UNREACHED)) {
+    assert.ok(ids.includes(id), `the list names a rule that does not exist: ${id}`);
+    assert.ok(String(CONFORMING_UNREACHED[id]).length > 40, `the reason given for ${id} says nothing`);
+  }
+  const notPass = out.filter(r => r.verdict !== "PASS" && !CONFORMING_UNREACHED[r.id]);
   assert.deepEqual(notPass.map(r => `${r.id}: ${r.verdict} ${r.why}`), [],
-    "the control: if a conforming log does not pass, every FAIL below is meaningless");
+    "a conforming log did not pass a rule it reaches");
+  for (const id of Object.keys(CONFORMING_UNREACHED)) {
+    const v = out.find(r => r.id === id);
+    assert.equal(v.verdict, "INCONCLUSIVE", `${id} is declared unreachable by conforming traffic and yet reached a verdict`);
+    assert.equal(v.cause, "unreached", `${id} abstained as this grader's own limit, which is not what the list claims`);
+  }
 });
 
 test("an empty log is INCONCLUSIVE everywhere, never PASS and never FAIL", () => {
@@ -613,4 +630,64 @@ test("neither message rule accuses an agent over a request this grader could not
                                       body: JSON.stringify({ item: "x" }) });
   for (const id of ids)
     assert.equal(grade([api], f.ctx).find(x => x.id === id).verdict, "INCONCLUSIVE");
+});
+
+// Section 7, the retry rule. Item 2 of the coverage map. A refusal is only useful if the agent
+// acts on it, and a retry loop after a 400 is a classic client bug.
+test("an agent that resends a request it was told to stop sending is faulted", async () => {
+  const keys = await f.agentKeys();
+  const req = async (over = {}) => f.request(keys, { path: "/poppy/orders", sub: "user-one", ...over });
+  const verdict = (log) => grade(log, f.ctx).find(x => x.id === "session.stops-after-refusal");
+  const refusedBy = (rule) => ({ rejection: { rule, error: "invalid_session" },
+                                 response: { status: 400, error: "invalid_session" } });
+
+  // The breach: the same request, refused again by the same rule.
+  const first = await req({ seq: 1, at: 1, ...refusedBy("session.alg") });
+  const again = await req({ seq: 2, at: 2, ...refusedBy("session.alg") });
+  assert.equal(verdict([first, again]).verdict, "FAIL",
+    "a request resent after invalid_session and refused by the same rule is the breach section 7 names");
+
+  // Refused once and not resent: nothing to fault.
+  assert.equal(verdict([first]).verdict, "PASS");
+
+  // A DIFFERENT request that fails the same rule is not a resend of the first.
+  const other = await req({ seq: 2, at: 2, path: "/poppy/orders/1", ...refusedBy("session.alg") });
+  assert.equal(verdict([first, other]).verdict, "PASS", "a different request is not a retry");
+
+  // The same request refused by a DIFFERENT rule means the agent changed something, which is
+  // exactly what section 7 asks of it.
+  const fixedOne = await req({ seq: 2, at: 2, ...refusedBy("session.aud") });
+  assert.equal(verdict([first, fixedOne]).verdict, "PASS",
+    "an agent that fixed one cause and tripped another did what it was told");
+
+  // And the same request accepted the second time is not a breach we can prove.
+  const accepted = await req({ seq: 2, at: 2, response: { status: 200, error: null } });
+  assert.equal(verdict([first, accepted]).verdict, "PASS");
+});
+
+test("the retry rule abstains unless this Company actually refused something under a rule", async () => {
+  const keys = await f.agentKeys();
+  const verdict = (log) => grade(log, f.ctx).find(x => x.id === "session.stops-after-refusal");
+
+  // Nothing refused: the agent was never told to stop, so there is nothing to judge.
+  const clean = await f.request(keys, { path: "/poppy/orders", sub: "user-one", seq: 1, at: 1 });
+  const none = verdict([clean]);
+  assert.equal(none.verdict, "INCONCLUSIVE");
+  assert.equal(none.cause, "unreached");
+
+  // A refusal of OURS is not the agent being told to stop. The conversation state guard answers
+  // 400 invalid_session when this grader could not verify a delegation for its own reasons, and
+  // that answer carries no rule, so it must not start this rule's clock: an agent resending after
+  // our failure would otherwise be faulted for our problem.
+  const ours = await f.request(keys, { path: "/poppy/conversations", method: "POST", seq: 1, at: 1,
+                                       conversationRoute: "start", sub: "user-one",
+                                       body: JSON.stringify({ id: "r1", message: { author: { type: "agent" }, text: "x" } }),
+                                       response: { status: 400, error: "invalid_session" } });
+  const resent = await f.request(keys, { path: "/poppy/conversations", method: "POST", seq: 2, at: 2,
+                                         conversationRoute: "start", sub: "user-one",
+                                         body: JSON.stringify({ id: "r1", message: { author: { type: "agent" }, text: "x" } }),
+                                         response: { status: 400, error: "invalid_session" } });
+  const v = verdict([ours, resent]);
+  assert.equal(v.verdict, "INCONCLUSIVE",
+    `an agent was faulted for resending after a refusal that was ours: ${v.why}`);
 });

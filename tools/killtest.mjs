@@ -343,6 +343,18 @@ export const MUTATIONS = [
     kills: "is not a web page",
     find: "  for (const op of cfg.apiOperations ?? [])\n    if (matchesTemplate(path, op.template))",
     to: "  for (const op of [])\n    if (matchesTemplate(path, op.template))" },
+  // Section 7, the retry rule.
+  { id: "checks/retry-not-checked", file: "checks.mjs", tests: "tests/checks.test.mjs",
+    kills: "resends a request it was told to stop sending is faulted",
+    find: "        if (later.length) resent.push(...later);", to: "" },
+  { id: "checks/retry-counts-any-later-request", file: "checks.mjs", tests: "tests/checks.test.mjs",
+    kills: "resends a request it was told to stop sending is faulted",
+    find: "                                      && shapeOf(x) === shapeOf(r)\n                                      && x.rejection?.rule === r.rejection.rule);",
+    to: ");" },
+  { id: "checks/retry-counts-our-own-refusal", file: "checks.mjs", tests: "tests/checks.test.mjs",
+    kills: "abstains unless this Company actually refused something under a rule",
+    find: "      const refused = log.filter(r => r.rejection?.error === \"invalid_session\" && r.rejection?.rule);",
+    to: "      const refused = log.filter(r => r.response?.error === \"invalid_session\");" },
   // 8.4 and 8.8, the message itself: the top of the coverage map.
   { id: "checks/message-content-unchecked", file: "checks.mjs", tests: "tests/checks.test.mjs",
     kills: "a message with no content is faulted",

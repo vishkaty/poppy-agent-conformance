@@ -38,6 +38,14 @@ export const BREACH = {
   // A request carrying the Session header and no Poppy-Version, which 3.4 makes a per-request
   // failure with its own error. The historical rule below is a different breach: two values
   // inside one Session.
+  // A request refused with invalid_session and then sent again, to be refused by the same rule.
+  // Section 7 tells an agent to stop until it fixes the cause, and says a new Session is not a fix.
+  "session.stops-after-refusal": async () => {
+    const refused = { rejection: { rule: "session.alg", error: "invalid_session" },
+                      response: { status: 400, error: "invalid_session" } };
+    return [await f.request(keys, { path: "/poppy/orders", sub: "user-one", seq: 1, at: 1, ...refused }),
+            await f.request(keys, { path: "/poppy/orders", sub: "user-one", seq: 2, at: 2, ...refused })];
+  },
   // A message with none of the four content fields. This Company already answers
   // `invalid_request` for it, as 8.13 says, so a rule had to fault it too.
   "conversation.message-content": async () => [await f.request(keys, { method: "POST", path: "/poppy/conversations",
@@ -147,4 +155,17 @@ export const BREACH = {
     r.sessionHeaderCount = 1;
     return [r];
   },
+};
+
+// Rules a CONFORMING log cannot reach, with the reason. The control asserts that every rule
+// passes on conforming traffic, which was true while every rule was about a request an agent
+// sends. A rule about what an agent does AFTER being refused cannot be reached by traffic that is
+// never refused, and making it PASS on silence instead would be the exact failure this file's
+// neighbour test forbids: "a grader that reports PASS on silence is the most damaging failure
+// available to it". So the rule abstains there, and the abstention is declared here rather than
+// tolerated quietly. The test also asserts each listed rule really is unreached, so this list
+// cannot hide a rule that fails.
+export const CONFORMING_UNREACHED = {
+  "session.stops-after-refusal":
+    "it judges what an agent does after this Company refuses a request under a rule, and conforming traffic is never refused, so there is no refusal for the control to stop sending after",
 };

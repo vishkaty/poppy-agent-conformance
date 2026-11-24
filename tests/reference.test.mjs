@@ -74,7 +74,7 @@ async function referenceIdentity(ctx) {
            operatorJwk: operator.publicJwk };
 }
 
-test("traffic built by the authors' own signing code passes every check", async () => {
+test("traffic built by the authors' own signing code passes every check it can reach", async () => {
   const id = await referenceIdentity(CTX_A);
   const token = ref.randomId(16);
   const log = [
@@ -95,9 +95,19 @@ test("traffic built by the authors' own signing code passes every check", async 
     await referenceRequest(CTX_A, { ...id, path: "/poppy/orders/2", token }),
   ];
   const out = grade(log, CTX_A);
-  const notPass = out.filter(r => r.verdict !== "PASS");
+  // Same allowance as the conforming control, and for the same reason: a rule about what an agent
+  // does after this Company refuses a request cannot be reached by traffic that is never refused.
+  // The list is declared beside the fixture, and the check below proves each listed rule really
+  // is unreached here rather than quietly failing.
+  const { CONFORMING_UNREACHED } = await import("./breaches.mjs");
+  const notPass = out.filter(r => r.verdict !== "PASS" && !CONFORMING_UNREACHED[r.id]);
   assert.deepEqual(notPass.map(r => `${r.id}: ${r.verdict} ${r.why}`), [],
     "our grader judged the authors' own conforming traffic as anything but a pass");
+  for (const id of Object.keys(CONFORMING_UNREACHED)) {
+    const v = out.find(r => r.id === id);
+    assert.equal(v.verdict, "INCONCLUSIVE", `${id} is declared unreachable by conforming traffic and reached a verdict`);
+    assert.equal(v.cause, "unreached");
+  }
 });
 
 test("the authors' agent, driven at two Companies, passes the pairwise rules", async () => {
