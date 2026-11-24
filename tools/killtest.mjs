@@ -432,7 +432,7 @@ export const MUTATIONS = [
     kills: "says nothing unless it knows the Company offers no sign-in",
     find: "      if (ctx?.authDisabled !== true)", to: "      if (false)" },
   { id: "checks/signin-reads-any-body", file: "checks.mjs", tests: "tests/checks.test.mjs",
-    kills: "says nothing unless it knows the Company offers no sign-in",
+    kills: "a token request is form encoded, so a JSON body carrying a grant_type is not one",
     find: "        if (r.method !== \"POST\" || !isForm(r)) continue;", to: "        if (r.method !== \"POST\") continue;" },
   // Section 7, the retry rule.
   { id: "checks/retry-not-checked", file: "checks.mjs", tests: "tests/checks.test.mjs",
@@ -577,6 +577,23 @@ export const MUTATIONS = [
     find: "return k.detail || ", to: "return \"\" || " },
   { id: "refusal/verifying-always-false", file: "server.mjs", tests: "tests/conversations.test.mjs", kills: "does not tell the builder to lease one",
     find: "const verifying = !!issuerKeys && (config.verifyWhen?.() ?? true);", to: "const verifying = false;" },
+
+  // Scoping the rules that read the whole log. In front of a real shop that log holds the shop:
+  // its own reset links, its own app signing customers in, verified crawlers. Each mutation here
+  // hands one of those back to a rule, and the shop gets accused of being a failing agent.
+  { id: "scope/signin-reads-whole-log", file: "checks.mjs", tests: "tests/not-agent-traffic.test.mjs",
+    kills: "no rule faults a shop's own traffic, because no sentence of 1.0 binds it",
+    find: "        if (!r.isAuthServer) continue;", to: "" },
+  { id: "scope/operator-signature-without-session", file: "checks.mjs", tests: "tests/not-agent-traffic.test.mjs",
+    kills: "no rule faults a shop's own traffic, because no sentence of 1.0 binds it",
+    find: '                                  && typeof r.headers?.["poppy-session"] === "string");', to: ');' },
+  { id: "scope/url-rule-reads-whole-log", file: "checks.mjs", tests: "tests/not-agent-traffic.test.mjs",
+    kills: "no rule faults a shop's own traffic, because no sentence of 1.0 binds it",
+    find: "        if (!mine(r)) continue;", to: "" },
+  { id: "scope/url-rule-claims-pages", file: "checks.mjs", tests: "tests/not-agent-traffic.test.mjs",
+    kills: "no rule faults a shop's own traffic, because no sentence of 1.0 binds it",
+    find: "      const mine = (r) => r.isResource || r.mustNotCarry",
+    to: "      const mine = (r) => r.isResource || r.isPage || r.mustNotCarry" },
 ];
 
 // Imported for its MUTATIONS list by a test that owns the count in the README. Everything

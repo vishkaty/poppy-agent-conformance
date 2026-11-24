@@ -1093,14 +1093,20 @@ export const CHECKS = [
           : "this grader was not told whether this Company offers sign-in, so it cannot say whether 3.2 binds here", "grader");
       const isForm = (r) => /application\/x-www-form-urlencoded/i.test(String(r.headers?.["content-type"] ?? ""));
       const grants = [];
+      // Only this Company's own authorization server, named by its metadata. The rule used to
+      // read every form POST in the log on the reasoning that a `grant_type` identifies a token
+      // request by construction, which is true and is not enough: in front of a real shop the
+      // log also holds the shop's own app signing a customer in at the shop's own route, and
+      // faulting a Personal Agent for that is the most expensive output this instrument has.
       for (const r of log) {
+        if (!r.isAuthServer) continue;
         if (r.method !== "POST" || !isForm(r)) continue;
         if (r.bodyComplete === false || r.bodyTruncated) continue;
         const grant = new URLSearchParams(r.body ?? "").get("grant_type");
         if (grant) grants.push({ r, grant });
       }
       if (!grants.length)
-        return SKIP("the agent sent no token request to this Company, so it started no sign-in here");
+        return SKIP("the agent sent no token request to this Company's authorization server, so it started no sign-in here");
       const signIn = grants.filter(({ grant }) => grant !== "refresh_token");
       return signIn.length
         ? FAIL("the agent tried to start a sign-in at a Company that offers none, which 3.2 forbids",
@@ -1218,9 +1224,14 @@ export const CHECKS = [
     // alternative is accusing an agent of not covering something on the strength of our own
     // inability to see the list.
     run(log) {
-      const signed = log.filter(r => typeof r.headers?.["signature-input"] === "string");
+      // A signature on a request that carries no Session header is not this sentence's business:
+      // 5.3 is about a signature covering the Session header, so with no Session there is nothing
+      // for it to cover. Verified crawlers sign `@authority` under Web Bot Auth all day and have
+      // never heard of Poppy; faulting them named the shop's own visitors as a failing agent.
+      const signed = log.filter(r => typeof r.headers?.["signature-input"] === "string"
+                                  && typeof r.headers?.["poppy-session"] === "string");
       if (!signed.length)
-        return SKIP("no request carried an operator signature, and signing at all is a SHOULD of 5.3 rather than this sentence");
+        return SKIP("no request carrying a Session header also carried an operator signature, and signing at all is a SHOULD of 5.3 rather than this sentence");
       const componentsOf = (v) => {
         const inside = /\(([^)]*)\)/.exec(String(v));
         if (!inside) return null;
@@ -1356,7 +1367,22 @@ export const CHECKS = [
     // like `1.2.3`, which is the false positive this rule would otherwise have shipped with.
     run(log) {
       const withQuery = [];
+      // The agent's own traffic only. The sentence binds a Personal Agent, and a shop's URLs are
+      // full of its own JWSs: a password reset link, an unsubscribe token, a signed preview. Every
+      // JWS decodes, so the value cannot say whose it is; the target can. A destination, a page, a
+      // document or an OAuth endpoint is Poppy traffic, and so is anything carrying a Session
+      // header. Scoping by target rather than by the header keeps the real breach visible, which
+      // is an agent that put its Session in the URL of a destination request instead of the header.
+      // A page is deliberately NOT in this list. `isPage` is every path on the Company's own
+      // website that is not a document or a destination, so the whole storefront is one, and a
+      // page fetch carrying a JWS in its query with no Session header is exactly what a person
+      // clicking a reset link looks like. Attributing that to an agent is the wrong FAIL the
+      // lease design already refused to make. The cost is that an agent putting its Session in
+      // the URL of a plain page goes unseen, which is the honest side of the trade.
+      const mine = (r) => r.isResource || r.mustNotCarry
+                       || typeof r.headers?.["poppy-session"] === "string";
       for (const r of log) {
+        if (!mine(r)) continue;
         let params = null;
         try { params = new URL(r.url).searchParams; } catch { continue; }
         if ([...params.keys()].length) withQuery.push({ r, params });

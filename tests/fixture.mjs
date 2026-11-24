@@ -10,6 +10,14 @@
 // address literal, and the suite was green throughout.
 import { SignJWT, exportJWK, generateKeyPair, calculateJwkThumbprint } from "jose";
 import { randomUUID, createHash } from "node:crypto";
+import { isAuthServerEndpoint } from "../record.mjs";
+import { authServerEndpointsFor } from "../discovery.mjs";
+
+// One derivation for every site in this fixture that builds a record by hand. Hand setting a
+// flag the recorder computes is how this fixture has handed rules a free pass five times; the
+// conforming log builds its token request separately from `request()`, so both sites ask here.
+const authServerFlag = (path) => isAuthServerEndpoint(ORIGIN + path,
+  { origin: ORIGIN, authServerEndpoints: authServerEndpointsFor(ORIGIN) });
 
 export const IDENTIFIER = "https://shop.example/poppy";
 export const DOMAIN = "shop.example";
@@ -81,6 +89,11 @@ export async function request(keys, over = {}) {
     host: DOMAIN, method, path, url: ORIGIN + path + (over.pathQuery ?? ""), at,
     // the fields record.mjs produces, so a fixture cannot pass a check by omitting them
     isResource: true, isPage: false, mustNotCarry: false,
+    // Derived from the SAME function the recorder uses, never hand set. The rule about starting a
+    // sign-in now looks only at this Company's own authorization server, because in front of a
+    // real shop the log also holds the shop signing its own customers in. Hand setting it here
+    // would have been the fifth field this fixture handed a rule for free.
+    isAuthServer: authServerFlag(path),
     sessionHeaderCount: over.noSession ? 0 : 1, sessionHeaderDecodable: !over.noSession,
     sessionHeaderDuplicated: false,
     headers: {
@@ -109,6 +122,7 @@ export async function request(keys, over = {}) {
     ...(over.rejection !== undefined ? { rejection: over.rejection } : {}),
     ...(over.response !== undefined ? { response: over.response } : {}),
     ...(over.isResource !== undefined ? { isResource: over.isResource } : {}),
+    ...(over.isAuthServer !== undefined ? { isAuthServer: over.isAuthServer } : {}),
     issuerKeys: issuerKeysFor(keys, over),
   };
 }
@@ -147,6 +161,7 @@ export async function conformingLog(keys, over = {}) {
   const refresh = {
     host: DOMAIN, method: "POST", path: "/poppy/token", url: ORIGIN + "/poppy/token",
     at: Math.floor(Date.now() / 1000), isResource: false, isPage: false, mustNotCarry: true,
+    isAuthServer: authServerFlag("/poppy/token"),
     classifiedAs: "a discovery or description document, or an OAuth endpoint (5.2)",
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body: "grant_type=refresh_token&refresh_token=rt_example", bodyComplete: true,

@@ -92,6 +92,24 @@ function documents(cfg) {
   return out;
 }
 
+// The Company's own authorization server endpoints, named by its own metadata rather than
+// guessed. A rule about a token request has to know WHICH token endpoint a request went to: a
+// shop runs one of its own, for its own app and its own staff, and RFC 6749 puts `grant_type`
+// in a form body and nowhere else, so a rule that looks for one anywhere in the log finds the
+// shop signing its own customers in and calls it a Personal Agent starting a sign-in.
+export function isAuthServerEndpoint(url, cfg) {
+  const x = u(url);
+  const origin = originOf(cfg.origin);
+  if (!x || x.origin !== origin) return false;
+  const path = norm(x.pathname);
+  for (const ref of cfg.authServerEndpoints ?? []) {
+    const p = ref.startsWith("/") ? norm(ref) : (originOf(ref) === origin ? pathOf(ref) : null);
+    if (p && p === path) return true;
+  }
+  return path === "/.well-known/oauth-authorization-server"
+      || path.startsWith("/.well-known/oauth-authorization-server/");
+}
+
 export function classify(url, method, cfg) {
   const x = u(url);
   const origin = originOf(cfg.origin);
@@ -267,6 +285,7 @@ export function recordOf(req, cfg, { at, body = null, bodyComplete = true } = {}
     headers: { ...req.headers }, body, bodyComplete,
     remoteAddress: sourceOf(req, cfg),
     isResource: c.isResource, isPage: c.isPage, mustNotCarry: c.mustNotCarry,
+    isAuthServer: isAuthServerEndpoint(url, cfg),
     classifiedAs: c.why, misdirected,
     sessionHeaderCount: session.count,
     sessionHeaderDecodable: session.decodable,

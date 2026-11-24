@@ -738,6 +738,26 @@ const tokenPost = async (keys, params, over = {}) => f.request(keys, {
   headers: { "content-type": "application/x-www-form-urlencoded" },
   isResource: false, ...over });
 
+test("a token request is form encoded, so a JSON body carrying a grant_type is not one", async () => {
+  // RFC 6749 puts `grant_type` in a form encoded token request and nowhere else, and that is the
+  // whole warrant for recognising a sign-in at all. A JSON POST to the token endpoint is therefore
+  // not a token request, and reading one as a sign-in would accuse an agent on the strength of a
+  // body OAuth does not define. This guard lost its only coverage the moment the rule was scoped
+  // to this Company's own authorization server, because every POST that now reaches it is form
+  // encoded in the fixtures: the mutation that removes the check survived, which is how it showed.
+  const keys = await f.agentKeys();
+  const disabled = { ...f.ctx, authDisabled: true };
+  // The body is form SHAPED, so URLSearchParams finds the grant in it, and the content type says
+  // it is not a form. A JSON object body would not discriminate: URLSearchParams finds no
+  // grant_type in `{"grant_type":"..."}` either way, so the first version of this test passed
+  // with the guard removed and proved nothing.
+  const rec = await tokenPost(keys, {}, { body: "grant_type=authorization_code&client_id=x",
+                                          headers: { "content-type": "application/json" } });
+  const v = grade([rec], disabled).find(x => x.id === "signin.not-when-disabled");
+  assert.equal(v.verdict, "INCONCLUSIVE",
+    "a JSON body is not an OAuth token request, so there is no grant for 3.2 to fault");
+});
+
 test("a sign-in grant at a Company that offers no sign-in is faulted, and a refresh is not", async () => {
   const keys = await f.agentKeys();
   const disabled = { ...f.ctx, authDisabled: true };
