@@ -56,6 +56,8 @@ export const CANARY_ABSTAINS = {
   "delegation.signature": "grader",
 };
 export const CANARY_EXCLUDED = {
+  "version.extensions-listed": "this Company lists no extensions, so the canary declares none and sends no Poppy-Extensions header. 3.4 asks for it only when an agent uses an extension with the Company.",
+
   "session.operator-signature-covers": "the canary signs Session JWTs with the authors own code and does no Web Bot Auth signing, so its requests carry no operator signature. The rule is judged for a builder whose agent sends one.",
 
   "conversation.context-fields": "the canary's conversation POST shares no locale, time zone or availability, because none of them is needed to exercise a Session, so 8.4's formats do not apply to its traffic. The rule is judged for a builder whose agent shares one of those facts.",
@@ -81,7 +83,8 @@ function ctxOf(discovery) {
   return { identifier: discovery?.auth?.issuer, domain: discovery?.organization?.domain,
            // 3.2's prohibition on starting a sign-in binds only where a Company offers none, so
            // the rule about it is told rather than left to guess.
-           authDisabled: discovery?.auth?.disabled === true };
+           authDisabled: discovery?.auth?.disabled === true,
+           extensions: Object.keys(discovery?.extensions ?? {}) };
 }
 const publicOriginOf = d => { try { return new URL(d.auth.issuer).origin; } catch { return null; } };
 

@@ -182,5 +182,5 @@ export async function conformingLog(keys, over = {}) {
 // The Company these fixtures describe, which sets `auth.disabled` exactly as the deployed one
 // does. A rule that asks whether sign-in is offered has to be told, and a ctx that left it out
 // made such a rule abstain here while the deployment judged it.
-export const ctx = { identifier: IDENTIFIER, domain: DOMAIN, authDisabled: true };
+export const ctx = { identifier: IDENTIFIER, domain: DOMAIN, authDisabled: true, extensions: [] };
 export const athOf = t => createHash("sha256").update(t).digest("base64url");

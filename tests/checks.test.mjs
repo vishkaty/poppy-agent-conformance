@@ -933,3 +933,60 @@ test("the operator signature rule judges only requests that carry one", async ()
   assert.equal(bad.verdict, "INCONCLUSIVE", `an unparseable header was treated as a breach: ${bad.why}`);
   assert.equal(bad.cause, "grader");
 });
+
+// 3.4's Poppy-Extensions. Item 5 of the coverage map, third of three. Nothing read that header at
+// all, so an agent could declare an extension a Company does not offer and hear nothing back.
+test("an extension the Company does not list is faulted, and one it lists is not", async () => {
+  const keys = await f.agentKeys();
+  const id = "version.extensions-listed";
+  const withHeader = async (value) => f.request(keys, { path: "/poppy/orders", sub: "user-one",
+                                                        headers: { "poppy-extensions": value } });
+  const verdict = async (value, extensions) =>
+    grade([await withHeader(value)], { ...f.ctx, extensions }).find(x => x.id === id);
+
+  assert.equal((await verdict('"operations";v="3"', ["operations"])).verdict, "PASS",
+    "an extension the document lists is what the sentence allows");
+  assert.equal((await verdict('"operations";v="3"', [])).verdict, "FAIL",
+    "this Company lists no extensions, so naming one is not naming one in the chosen document");
+  assert.equal((await verdict('"operations";v="3", "links";v="1"', ["operations"])).verdict, "FAIL",
+    "one listed and one not is still one not");
+  assert.equal((await verdict('"operations";v="3", "links";v="1"', ["operations", "links"])).verdict,
+    "PASS", "both listed");
+
+  // The version belongs in a `v` parameter as a String, which is the other half of the sentence.
+  // The REASON is asserted, not just the verdict: a missing parameter and a parameter that is not
+  // a String are two different faults, and a mutation proved that without this the second branch
+  // silently covered for the first.
+  const noVersion = await verdict('"operations"', ["operations"]);
+  assert.equal(noVersion.verdict, "FAIL", "a name with no version does not say which version it uses");
+  assert.match(noVersion.why + JSON.stringify(noVersion.evidence ?? []), /no v parameter/,
+    `the fault named should be the missing parameter: ${JSON.stringify(noVersion.evidence)}`);
+  const unquoted = await verdict('"operations";v=3', ["operations"]);
+  assert.equal(unquoted.verdict, "FAIL", "a bare number is not a String in the v parameter");
+  assert.match(unquoted.why + JSON.stringify(unquoted.evidence ?? []), /rather than as a String/,
+    `the fault named should be the unquoted version: ${JSON.stringify(unquoted.evidence)}`);
+});
+
+test("the extensions rule abstains on what it cannot read, and on requests without the header", async () => {
+  const keys = await f.agentKeys();
+  const id = "version.extensions-listed";
+  const plain = await f.request(keys, { path: "/poppy/orders", sub: "user-one" });
+  const none = grade([plain], { ...f.ctx, extensions: [] }).find(x => x.id === id);
+  assert.equal(none.verdict, "INCONCLUSIVE");
+  assert.equal(none.cause, "unreached");
+
+  // Told nothing about the document, it must not decide that every name is unlisted.
+  const declared = await f.request(keys, { path: "/poppy/orders", sub: "user-one",
+                                           headers: { "poppy-extensions": '"operations";v="3"' } });
+  const untold = grade([declared], { identifier: f.ctx.identifier, domain: f.ctx.domain })
+    .find(x => x.id === id);
+  assert.equal(untold.verdict, "INCONCLUSIVE", `this grader guessed the document: ${untold.why}`);
+  assert.equal(untold.cause, "grader");
+
+  // A header with no quoted name at all is not something to read names out of.
+  const garbled = await f.request(keys, { path: "/poppy/orders", sub: "user-one",
+                                          headers: { "poppy-extensions": "operations v 3" } });
+  const bad = grade([garbled], { ...f.ctx, extensions: ["operations"] }).find(x => x.id === id);
+  assert.equal(bad.verdict, "INCONCLUSIVE", `an unreadable header was treated as a breach: ${bad.why}`);
+  assert.equal(bad.cause, "grader");
+});

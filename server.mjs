@@ -232,7 +232,10 @@ export function createGrader(cfg) {
              protocolVersion: d.protocol_version,
              // 3.2's prohibition on starting a sign-in binds only at a Company that offers none,
              // so a rule about it has to be told rather than guess.
-             authDisabled: d.auth?.disabled === true };
+             authDisabled: d.auth?.disabled === true,
+             // 3.4 judges a declared extension against the chosen document, so the rule is given
+             // the list rather than left to guess that every name is unlisted.
+             extensions: Object.keys(d.extensions ?? {}) };
   }
 
   // Every response goes through here, so a record always says what the agent was told. The

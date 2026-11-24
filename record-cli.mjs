@@ -85,7 +85,8 @@ async function record(configPath) {
   const logPath = at(cfg.log);
   const ctx = { identifier: identifierOf(discovery), domain: discovery?.organization?.domain,
                 protocolVersion: discovery?.protocol_version,
-                authDisabled: discovery?.auth?.disabled === true };
+                authDisabled: discovery?.auth?.disabled === true,
+                extensions: Object.keys(discovery?.extensions ?? {}) };
   const file = openRunFile(logPath, { origin: cfg.origin, ctx, discovery, apiOperations,
                                       authServerEndpoints, graderCommit: graderCommit() });
 

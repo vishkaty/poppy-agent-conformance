@@ -38,6 +38,12 @@ export const BREACH = {
   // A request carrying the Session header and no Poppy-Version, which 3.4 makes a per-request
   // failure with its own error. The historical rule below is a different breach: two values
   // inside one Session.
+  // An extension declared that the chosen document does not list. This Company lists none by
+  // default, so any declaration is one, and that is the realistic shape of the mistake: an agent
+  // that declares what it supports rather than what the Company offers.
+  "version.extensions-listed": async () => [await f.request(keys, {
+    path: "/poppy/orders", sub: "user-one",
+    headers: { "poppy-extensions": '"operations";v="3"' } })],
   // An operator signature that covers the method and the target and not the Session header, which
   // is what Web Bot Auth's own defaults produce.
   "session.operator-signature-covers": async () => [await f.request(keys, {
@@ -196,6 +202,8 @@ export const BREACH = {
 // tolerated quietly. The test also asserts each listed rule really is unreached, so this list
 // cannot hide a rule that fails.
 export const CONFORMING_UNREACHED = {
+  "version.extensions-listed":
+    "this Company lists no extensions, so a conforming agent declares none and sends no Poppy-Extensions header at all. 3.4 asks for the header only when an agent uses an extension with the Company",
   "session.stops-after-refusal":
     "it judges what an agent does after this Company refuses a request under a rule, and conforming traffic is never refused, so there is no refusal for the control to stop sending after",
 };

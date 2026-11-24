@@ -64,6 +64,7 @@ export const ENFORCE_EXCLUDED = {
   // `invalid_session` and `version_unsupported` only, so refusing from here would answer the
   // wrong error for the breach; the conversation handler already answers it where the
   // specification does.
+  "version.extensions-listed": "3.4 names its own answer for this: without the header, or when it fails to parse, the Company treats the request as using no extensions, which is what this Company does. Refusing instead would answer a request the specification tells it to serve.",
   "session.operator-signature-covers": "the signature is the operator identifying itself to bot defences, not the Session this path verifies, and 5.3 gives no error for a signature that covers too little. Refusing on it would invent an answer the specification does not name.",
   "conversation.context-fields": "8.13 puts a malformed field under `invalid_request`, and this path answers `invalid_session` or `version_unsupported` only, so enforcing it here would name the wrong error. This Company serves a context it cannot read rather than refusing one, because 8.4 gives these facts to the Company Agent and a Company that rejected a bad locale would be stricter than the text.",
   "delegation.key-per-user": "it needs more than one request to decide: one delegated key serving two Users is only visible across the Sessions of a run, and enforcement grades the single request in front of it, where one key and one User look exactly right.",

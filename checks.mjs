@@ -1245,6 +1245,59 @@ export const CHECKS = [
       return PASS(`${signed.length - unreadable.length} signed request(s) cover poppy-session, and authorization wherever a token was sent`);
     },
   },
+  {
+    id: "version.extensions-listed",
+    section: "3.4",
+    quote: "each the name of an extension in the chosen document, with the version it uses as a String in the `v` parameter",
+    // Item 5 of the coverage map, third of three. Nothing read `Poppy-Extensions` at all, so an
+    // agent could declare an extension a Company does not offer and hear nothing about it. This
+    // Company lists none by default, which makes the rule reachable here with any declaration.
+    //
+    // What it judges: every name declared is one the chosen document lists, and each carries its
+    // version as a String in the `v` parameter. What it does NOT do is implement RFC 9651. It
+    // reads the quoted names and their `v` parameters with a narrow pattern, and a header it
+    // cannot read names out of abstains as our own limit rather than being called malformed,
+    // because "this grader could not parse it" and "the agent sent something invalid" are
+    // different statements and only one of them is about the agent.
+    //
+    // It abstains, as our limit, when it was not told which extensions the document lists.
+    // Deciding that every name is unlisted because we do not know the document would accuse an
+    // agent of our ignorance.
+    run(log, ctx) {
+      const declared = log.filter(r => typeof r.headers?.["poppy-extensions"] === "string"
+                                       && r.headers["poppy-extensions"] !== "");
+      if (!declared.length)
+        return SKIP("no request declared an extension, and 3.4 asks for the header only when an agent uses one");
+      if (!Array.isArray(ctx?.extensions))
+        return SKIP("this grader was not told which extensions the chosen document lists, so it cannot say whether a declared name is one of them", "grader");
+      const listed = new Set(ctx.extensions.map(String));
+      const unreadable = [], bad = [];
+      for (const r of declared) {
+        const value = r.headers["poppy-extensions"];
+        // Each member is a quoted name, optionally followed by parameters. The `v` parameter has
+        // to be a quoted String for the sentence to be satisfied.
+        const members = String(value).split(",").map(x => x.trim()).filter(Boolean);
+        const parsed = members.map(m => {
+          const name = /^"([^"]+)"/.exec(m);
+          if (!name) return null;
+          const v = /;\s*v\s*=\s*("?)([^";]*)\1/.exec(m);
+          return { name: name[1], version: v ? v[2] : null, quoted: !!(v && v[1] === '"') };
+        });
+        if (!parsed.length || parsed.some(x => x === null)) { unreadable.push(r); continue; }
+        for (const m of parsed) {
+          if (!listed.has(m.name)) bad.push({ r, what: `${JSON.stringify(m.name)} is not an extension this Company lists` });
+          else if (m.version === null) bad.push({ r, what: `${JSON.stringify(m.name)} carries no v parameter, so it does not say which version it uses` });
+          else if (!m.quoted) bad.push({ r, what: `${JSON.stringify(m.name)} gives its version as ${m.version} rather than as a String` });
+        }
+      }
+      if (bad.length)
+        return FAIL("a declared extension is not one the chosen document lists, or does not carry its version as 3.4 requires",
+                    bad.slice(0, 3).map(b => b.what), bad.map(b => b.r));
+      if (unreadable.length === declared.length)
+        return SKIP(`${unreadable.length} request(s) carried a Poppy-Extensions this grader could not read a name out of`, "grader");
+      return PASS(`${declared.length - unreadable.length} request(s) declared only extensions this Company lists, each with its version as a String`);
+    },
+  },
 ];
 
 // The cross-Company checks. These need logs from BOTH hostnames, and they are the reason
