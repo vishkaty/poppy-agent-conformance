@@ -40,6 +40,7 @@ export const CANARY_RULES = [
   // by the control rather than excluded from it.
   "conversation.request-id", "conversation.id-format",
   "conversation.message-content", "conversation.message-author",
+  "delegation.key-per-user",
   "pairwise.user-id", "pairwise.delegated-key",
 ];
 

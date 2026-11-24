@@ -38,6 +38,13 @@ export const BREACH = {
   // A request carrying the Session header and no Poppy-Version, which 3.4 makes a per-request
   // failure with its own error. The historical rule below is a different breach: two values
   // inside one Session.
+  // One delegated key signing for two Users at one Company, which is what an agent that caches a
+  // single delegation per process does. 5.2 names the cost: a leaked key should expose one User.
+  "delegation.key-per-user": async () => {
+    const dlgCompact = await f.delegation(keys);
+    return [await f.request(keys, { dlgCompact, sid: "s1", sub: "user-A", seq: 1, at: 1 }),
+            await f.request(keys, { dlgCompact, sid: "s2", sub: "user-B", seq: 2, at: 2 })];
+  },
   // A sign-in grant at a Company that offers none. 3.2 forbids starting Direct, Device or
   // Mediated Sign-In there, and the grant is what identifies the attempt on the wire.
   "signin.not-when-disabled": async () => [await f.request(keys, {

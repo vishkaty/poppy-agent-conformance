@@ -1109,6 +1109,46 @@ export const CHECKS = [
         : PASS(`${grants.length} token request(s), all of them refreshes, which 3.2 keeps working at a Company with sign-in switched off`);
     },
   },
+  {
+    id: "delegation.key-per-user",
+    section: "5.2",
+    quote: "Each delegated key signs for one User ID (below), so a leaked one exposes only that User at one Company",
+    // Item 4 of the coverage map, and the half of this requirement nobody was checking.
+    // `pairwise.delegated-key` compares keys ACROSS the two Companies, which catches an agent
+    // that shows one key to both. It cannot see an agent that caches a single delegation and
+    // signs for every User of ONE Company with it, because each Company then sees one key and one
+    // User per Session and nothing looks across the Sessions. That is the laziest implementation
+    // available, one delegation per process, and 5.2 names the cost in the same breath: a leaked
+    // key should expose one User, not all of them.
+    //
+    // It quotes 5.2's own statement of the property rather than the MUST the pairwise rule
+    // carries, because the suite forbids two rules on one sentence and these are two halves of
+    // one idea stated in two places.
+    run(log) {
+      const s = sessionRequests(log);
+      if (!s.length) return SKIP("the agent sent no Session header, so no delegated key was presented");
+      const usersByKey = new Map();
+      for (const { r, jwt } of s) {
+        const dlg = decodeJwt(jwt.header?.poppy_dlg);
+        const key = thumbprintOf(dlg?.payload?.cnf?.jwk);
+        const user = jwt.payload?.sub;
+        // A missing key or a missing User leaves nothing to compare, and other rules report both.
+        // Inventing a placeholder here would make unrelated requests look like one User.
+        if (!key || typeof user !== "string" || user === "") continue;
+        const got = usersByKey.get(key) ?? new Map();
+        if (!got.has(user)) got.set(user, r);
+        usersByKey.set(key, got);
+      }
+      if (!usersByKey.size)
+        return SKIP("no request carried both a delegated key and a User ID this grader could read", "grader");
+      const shared = [...usersByKey].filter(([, users]) => users.size > 1);
+      return shared.length
+        ? FAIL("one delegated key signed for more than one User at this Company, so a leak of it would expose every one of them",
+               shared.slice(0, 3).map(([key, users]) => `key ${key.slice(0, 12)} signed for ${[...users.keys()].length} Users`),
+               shared.flatMap(([, users]) => [...users.values()]))
+        : PASS(`${usersByKey.size} delegated key(s), each signing for one User at this Company`);
+    },
+  },
 ];
 
 // The cross-Company checks. These need logs from BOTH hostnames, and they are the reason

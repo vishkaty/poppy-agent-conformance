@@ -797,3 +797,61 @@ test("the sign-in rule says nothing unless it knows the Company offers no sign-i
   assert.equal(v.verdict, "INCONCLUSIVE",
     `a request that is not form encoded was read as a token request: ${v.why}`);
 });
+
+// 5.2, one delegated key per User, WITHIN one Company. Item 4 of the coverage map. The pairwise
+// rule compares keys ACROSS the two Companies, so an agent that cached one delegation and signed
+// for every User with it passed as long as each Company saw one User. That is the laziest
+// implementation there is.
+test("one delegated key signing for two Users at one Company is faulted", async () => {
+  const keys = await f.agentKeys();
+  const id = "delegation.key-per-user";
+  const dlgCompact = await f.delegation(keys);          // one delegation, so one delegated key
+
+  // Two Users at this Company, both signed with the same delegated key.
+  const shared = [
+    await f.request(keys, { dlgCompact, sid: "s1", sub: "user-A", seq: 1, at: 1 }),
+    await f.request(keys, { dlgCompact, sid: "s2", sub: "user-B", seq: 2, at: 2 }),
+  ];
+  const v = grade(shared, f.ctx).find(x => x.id === id);
+  assert.equal(v.verdict, "FAIL", `one key signed for two Users and was not faulted: ${v.why}`);
+
+  // The same User over several Sessions with one key is exactly what the sentence allows.
+  const oneUser = [
+    await f.request(keys, { dlgCompact, sid: "s1", sub: "user-A", seq: 1, at: 1 }),
+    await f.request(keys, { dlgCompact, sid: "s2", sub: "user-A", seq: 2, at: 2 }),
+  ];
+  assert.equal(grade(oneUser, f.ctx).find(x => x.id === id).verdict, "PASS",
+    "one key for one User across Sessions is what 5.2 asks for");
+
+  // Two Users, each with its own delegated key, is also right.
+  const otherKeys = await f.agentKeys();
+  const proper = [
+    await f.request(keys, { dlgCompact, sid: "s1", sub: "user-A", seq: 1, at: 1 }),
+    await f.request(otherKeys, { dlgCompact: await f.delegation(otherKeys), sid: "s2", sub: "user-B", seq: 2, at: 2 }),
+  ];
+  assert.equal(grade(proper, f.ctx).find(x => x.id === id).verdict, "PASS",
+    "a key per User is the shape the sentence describes");
+});
+
+test("the key-per-user rule abstains rather than guessing from what it cannot read", async () => {
+  const keys = await f.agentKeys();
+  const id = "delegation.key-per-user";
+  // One request cannot show a key serving two Users.
+  const one = await f.request(keys, { sub: "user-A", seq: 1, at: 1 });
+  const v = grade([one], f.ctx).find(x => x.id === id);
+  assert.equal(v.verdict, "PASS", `a single request is not a breach: ${v.why}`);
+
+  // A Session JWT with no sub leaves the User unknown, and claims-present is the rule that
+  // reports that. This one must not invent a User to compare. The discriminating case, found by a
+  // mutation that survived without it, is a shared key where one request names a User and another
+  // names none: treating the absence as a User makes that key look like it serves two.
+  const dlgCompact = await f.delegation(keys);
+  const named = await f.request(keys, { dlgCompact, sid: "s1", sub: "user-A", seq: 1, at: 1 });
+  const unnamed = await f.request(keys, { dlgCompact, sid: "s2", claims: { sub: undefined }, seq: 2, at: 2 });
+  const v2 = grade([named, unnamed], f.ctx).find(x => x.id === id);
+  assert.equal(v2.verdict, "PASS",
+    `a request with no sub was counted as a second User of the same key: ${v2.why}`);
+
+  // And an empty log says nothing.
+  assert.equal(grade([], f.ctx).find(x => x.id === id).verdict, "INCONCLUSIVE");
+});
