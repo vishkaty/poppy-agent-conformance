@@ -120,6 +120,19 @@ test("the README states the real number of checks", () => {
     `the README does not say "${cap(spell(CHECKS.length))} need one Company" for ${CHECKS.length}`);
 });
 
+test("the README's boundary paragraph names the real number of rules", () => {
+  // "The twenty nine rules are concentrated almost entirely on one layer" sat on the first
+  // screen while forty shipped, in the one paragraph a reader is told to take as the boundary
+  // of the whole claim. Line 12 was derived and this prose was not, so a count the suite owns
+  // in one sentence went stale in another. The derivation covers both now.
+  const readme = readFileSync(join(HERE, "../README.md"), "utf8").replace(/\s+/g, " ");
+  const total = CHECKS.length + PAIRWISE.length;
+  assert.ok(readme.includes(`The ${spell(total)} rules are concentrated`),
+    `the README does not say "The ${spell(total)} rules are concentrated" for ${total}`);
+  assert.ok(readme.includes(`reading ${spell(total)} rules as`),
+    `the README does not say "reading ${spell(total)} rules as" for ${total}`);
+});
+
 test("the README states the real coverage of the control that gates every lease", async () => {
   // The Status section said "23 of the 24 rules" after the count had moved twice, in the same
   // paragraph that says the test count is deliberately not quoted because it went stale. A

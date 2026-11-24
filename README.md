@@ -7,6 +7,15 @@ The protocol has two sides. The authors ship a Company kit with a validator, a c
 a fake Company, so a Company can check itself. This is the other side: it judges what a
 Personal Agent puts on the wire, which only the Company it is talking to can see.
 
+It is not the first to judge that side.
+[adewale/pda](https://github.com/adewale/pda) has recorded agent side violations since October
+2026, in a catalog of 192 ids that each quote the sentence they rest on, with a script checking
+every quote against a pinned capture and a test row per id that breaks exactly one thing. Its
+reach is wider than this one: client assertions, DPoP, approval, device and the authorize flow,
+none of which a Company configured like this one can see. What is different here is not the
+catalog but what happens to a breach. This Company refuses from the same call that explains the
+refusal, so a status code and a verdict cannot disagree.
+
 ## What it does
 
 Forty checks over a recorded request log. Thirty eight need one Company. Two need
@@ -26,7 +35,7 @@ one even with a keyed hash, and the guides allow an HMAC of an internal id with 
 identifier. A Company cannot tell those apart on the wire, so no check here claims to.
 
 It does not look at most of what 1.0 asks of an agent, and that is the honest headline of this
-section. The twenty nine rules are concentrated almost entirely on one layer: the Session header
+section. The forty rules are concentrated almost entirely on one layer: the Session header
 of 5.2 and the delegation that vouches for it, which is the layer a Company depends on to know who
 is calling. On that layer the coverage is close to exhaustive. Outside it, the gaps are large and
 specific. Two rules now read the message itself, so a message with none of the content fields 8.4
@@ -43,8 +52,8 @@ side: an agent that sends a sign-in grant to the token endpoint of a Company tha
 sign-in is faulted under 3.2. Beyond that, nothing in sections 4, 6 or 9, nor in any extension,
 can be reached by a Company that sets `auth.disabled`, serves no website and answers its tasks
 endpoint with `{ok: true}`, which is what this one does. A reader should take
-the rule list as the claim and this paragraph as its boundary, rather than reading twenty nine
-rules as twenty nine out of thirty.
+the rule list as the claim and this paragraph as its boundary, rather than reading forty
+rules as forty out of forty one.
 
 What it does check about conversation ids is the request id of 8.3, that one User does not use the
 same id for two different requests, and the 1 to 256 character URL safe base64 alphabet of 8.2.
