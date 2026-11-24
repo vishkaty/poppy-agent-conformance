@@ -1298,6 +1298,86 @@ export const CHECKS = [
       return PASS(`${declared.length - unreadable.length} request(s) declared only extensions this Company lists, each with its version as a String`);
     },
   },
+  {
+    id: "conversation.wait-seconds",
+    section: "8.5",
+    quote: "`wait` is a whole number of seconds, 0 or more",
+    // Another disagreement closed: this Company answers `invalid_request` for a `wait` it cannot
+    // read as a whole number, and no rule faulted it. The parameter belongs to the events route
+    // of 8.5 and nowhere else, so nothing outside that route is judged here.
+    run(log) {
+      const events = log.filter(r => r.conversationRoute === "events");
+      if (!events.length) return SKIP("the agent read no events, so 8.5's `wait` does not apply");
+      const waits = [];
+      for (const r of events) {
+        let q = null;
+        try { q = new URL(r.url).searchParams.get("wait"); } catch { q = null; }
+        if (q !== null) waits.push({ r, wait: q });
+      }
+      if (!waits.length) return SKIP("no events request carried a `wait`, which 8.5 leaves optional");
+      const bad = waits.filter(({ wait }) => !/^\d+$/.test(wait));
+      return bad.length
+        ? FAIL("a `wait` is not a whole number of seconds, 0 or more, which 8.5 defines",
+               bad.slice(0, 3).map(b => `${b.r.method} ${b.r.path}: wait=${JSON.stringify(b.wait)}`),
+               bad.map(b => b.r))
+        : PASS(`${waits.length} events request(s) carried a whole number of seconds`);
+    },
+  },
+  {
+    id: "session.sid-characters",
+    section: "5.2",
+    quote: "It uses the same characters as Conversation IDs (8.2).",
+    // The alphabet of 8.2 applied to the Session ID, which 5.2 points at rather than restating.
+    // Standard base64 instead of the URL safe alphabet is the plausible slip, and the pattern is
+    // the one `conversation.id-format` already uses, so the two cannot disagree about an alphabet.
+    run(log) {
+      const s = sessionRequests(log);
+      const sids = [...new Set(s.map(x => x.jwt.payload?.sid).filter(v => typeof v === "string" && v !== ""))];
+      if (!sids.length) return SKIP("no Session JWT carried a `sid`, which claims-present reports");
+      const allowed = /^[A-Za-z0-9_-]{1,256}$/;
+      const bad = sids.filter(v => !allowed.test(v));
+      return bad.length
+        ? FAIL("a `sid` is not 1 to 256 characters from the URL-safe base64 alphabet that 8.2 defines",
+               bad.slice(0, 3).map(v => JSON.stringify(v.slice(0, 40))),
+               s.filter(x => bad.includes(x.jwt.payload?.sid)).map(x => x.r))
+        : PASS(`${sids.length} Session ID(s), each from the alphabet 8.2 defines`);
+    },
+  },
+  {
+    id: "session.not-in-a-url",
+    section: "5.6",
+    quote: "Personal Agents MUST NOT send tokens or Session JWTs in a URL, and Companies MUST NOT accept them from one.",
+    // A secret in a URL ends up in logs, in a Referer and in a browser history, which is why the
+    // sentence binds both sides. It is rare and trivially decidable, so there is no reason not to
+    // look.
+    //
+    // A query value counts as a JWT only when its first segment really decodes to a JWS header
+    // with an `alg`. Matching three dot separated base64url runs would fault a version string
+    // like `1.2.3`, which is the false positive this rule would otherwise have shipped with.
+    run(log) {
+      const withQuery = [];
+      for (const r of log) {
+        let params = null;
+        try { params = new URL(r.url).searchParams; } catch { continue; }
+        if ([...params.keys()].length) withQuery.push({ r, params });
+      }
+      if (!withQuery.length) return SKIP("no request carried a query, so nothing could be in one");
+      const bad = [];
+      for (const { r, params } of withQuery) {
+        const auth = String(r.headers?.authorization ?? "").replace(/^\w+\s+/, "");
+        for (const [key, value] of params) {
+          const jwt = decodeJwt(value);
+          if (jwt?.header?.alg) { bad.push({ r, what: `${key} carries a JWT` }); continue; }
+          if (/^(bearer|dpop)\s/i.test(value)) { bad.push({ r, what: `${key} carries a ${value.split(/\s/)[0]} token` }); continue; }
+          if (auth && value === auth) bad.push({ r, what: `${key} repeats this request's access token` });
+        }
+      }
+      return bad.length
+        ? FAIL("a token or a Session JWT was sent in a URL, which 5.6 forbids both sides to do",
+               bad.slice(0, 3).map(b => `${b.r.method} ${b.r.path}: ${b.what}`), bad.map(b => b.r))
+        : PASS(`${withQuery.length} request(s) carried a query and none of them carried a token or a Session JWT in it`);
+    },
+  },
 ];
 
 // The cross-Company checks. These need logs from BOTH hostnames, and they are the reason

@@ -41,6 +41,7 @@ export const CANARY_RULES = [
   "conversation.request-id", "conversation.id-format",
   "conversation.message-content", "conversation.message-author",
   "delegation.key-per-user",
+  "session.sid-characters",
   "pairwise.user-id", "pairwise.delegated-key",
 ];
 
@@ -56,6 +57,9 @@ export const CANARY_ABSTAINS = {
   "delegation.signature": "grader",
 };
 export const CANARY_EXCLUDED = {
+  "conversation.wait-seconds": "the canary reads no events, so 8.5's `wait` never appears in its traffic. The rule is judged for a builder whose agent reads them.",
+  "session.not-in-a-url": "the canary sends no query at all, so there is nothing in a URL for 5.6 to be judged on. The rule is judged for a builder whose agent sends one.",
+
   "version.extensions-listed": "this Company lists no extensions, so the canary declares none and sends no Poppy-Extensions header. 3.4 asks for it only when an agent uses an extension with the Company.",
 
   "session.operator-signature-covers": "the canary signs Session JWTs with the authors own code and does no Web Bot Auth signing, so its requests carry no operator signature. The rule is judged for a builder whose agent sends one.",

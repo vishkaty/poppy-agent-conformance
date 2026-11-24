@@ -38,6 +38,18 @@ export const BREACH = {
   // A request carrying the Session header and no Poppy-Version, which 3.4 makes a per-request
   // failure with its own error. The historical rule below is a different breach: two values
   // inside one Session.
+  // A `wait` this Company already refuses with invalid_request, and no rule faulted.
+  "conversation.wait-seconds": async () => [await f.request(keys, {
+    path: "/poppy/conversations/c_1/events", conversationRoute: "events", sub: "user-one",
+    pathQuery: "?wait=abc" })],
+  // A Session ID in standard base64 rather than the URL safe alphabet 8.2 defines.
+  "session.sid-characters": async () => [await f.request(keys, { sid: "s+1/2=", sub: "user-one" })],
+  // A Session JWT in a query parameter, which 5.6 forbids both sides to do.
+  "session.not-in-a-url": async () => {
+    const r = await f.request(keys, { path: "/poppy/orders", sub: "user-one" });
+    return [await f.request(keys, { path: "/poppy/orders", sub: "user-one",
+                                    pathQuery: `?session=${r.headers["poppy-session"]}` })];
+  },
   // An extension declared that the chosen document does not list. This Company lists none by
   // default, so any declaration is one, and that is the realistic shape of the mistake: an agent
   // that declares what it supports rather than what the Company offers.
@@ -202,6 +214,8 @@ export const BREACH = {
 // tolerated quietly. The test also asserts each listed rule really is unreached, so this list
 // cannot hide a rule that fails.
 export const CONFORMING_UNREACHED = {
+  "conversation.wait-seconds":
+    "the conforming log reads no events, and 8.5's `wait` belongs to that route alone, so there is no parameter here for the rule to judge",
   "version.extensions-listed":
     "this Company lists no extensions, so a conforming agent declares none and sends no Poppy-Extensions header at all. 3.4 asks for the header only when an agent uses an extension with the Company",
   "session.stops-after-refusal":
@@ -215,6 +229,8 @@ export const CONFORMING_UNREACHED = {
 // a shared list would have to claim a rule is unreachable in traffic that reaches it.
 export const REFERENCE_UNREACHED = {
   ...CONFORMING_UNREACHED,
+  "session.not-in-a-url":
+    "this control sends no query on any request, so 5.6 has nothing in a URL to judge here. The conforming log does carry one, which is why the rule is reached there",
   "session.operator-signature-covers":
     "this control is built with the authors own signing helpers, which mint Session JWTs and delegations and do no Web Bot Auth signing, so its requests carry no operator signature for 5.3's sentence to judge",
   "signin.not-when-disabled":

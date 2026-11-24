@@ -75,7 +75,10 @@ export async function request(keys, over = {}) {
                           kid: keys.thumb, poppy_dlg: over.noDlg ? undefined : dlg })
     .sign(keys.delegated.privateKey);
   return {
-    host: DOMAIN, method, path, url: ORIGIN + path, at,
+    // `pathQuery` goes on the url and NOT on the htu, because 5.2 says htu carries the URL
+    // without the query, so a query is exactly the thing a record must be able to have while the
+    // signature stays correct.
+    host: DOMAIN, method, path, url: ORIGIN + path + (over.pathQuery ?? ""), at,
     // the fields record.mjs produces, so a fixture cannot pass a check by omitting them
     isResource: true, isPage: false, mustNotCarry: false,
     sessionHeaderCount: over.noSession ? 0 : 1, sessionHeaderDecodable: !over.noSession,
@@ -156,7 +159,11 @@ export async function conformingLog(keys, over = {}) {
     // what a signature covers abstains here, and a control that abstains proves less than one
     // that passes.
     request(keys, { ...over, sid, sub, dlgCompact, path: "/poppy/orders", headers: SIGNED }),
-    request(keys, { ...over, sid, sub, dlgCompact, path: "/poppy/orders/1", headers: SIGNED }),
+    // A query on one of them, with nothing secret in it, so the rule about tokens in a URL is
+    // reached here and passes rather than abstaining. htu stays the URL without the query, which
+    // is what 5.2 asks for and is the reason a query is safe to add to a conforming record.
+    request(keys, { ...over, sid, sub, dlgCompact, path: "/poppy/orders/1", headers: SIGNED,
+                    pathQuery: "?page=2" }),
     // 8.3: "Every `POST` body has an `id`, chosen by the Personal Agent". A conforming agent
     // sends one, and the record carries which conversation route it is, so the rule about
     // request IDs has something to pass on.

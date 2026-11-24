@@ -9,7 +9,7 @@ Personal Agent puts on the wire, which only the Company it is talking to can see
 
 ## What it does
 
-Thirty seven checks over a recorded request log. Thirty five need one Company. Two need
+Forty checks over a recorded request log. Thirty eight need one Company. Two need
 two Companies, because the rules they test are pairwise: a User ID must differ per Company
 (spec 5.1) and a delegated key must sign for one User ID only (spec 5.2), so no single
 Company can observe either.
@@ -163,7 +163,7 @@ Session. Telling an agent the wrong one sends it into a loop.
 instruction to `invalid_session`, and this Company ends no Session and holds no account, so no
 failure here can be one.
 
-Sixteen rules are reported and never refused, each with its reason in `enforce.mjs`: the three that
+Nineteen rules are reported and never refused, each with its reason in `enforce.mjs`: the three that
 need more than one request to decide, the one about documents, the two privacy rules, which are
 the most contestable accusations this grader makes and so are never used to close a door, the
 request id of 8.3, the id alphabet of 8.2 and a message with no content under 8.4, whose answers
@@ -674,23 +674,24 @@ than a citation.
 
 Early, and honest about what has been measured.
 
-Thirty seven rules, and 147 mutations that each break one guard and require a named test
+Forty rules, and 152 mutations that each break one guard and require a named test
 to notice. The test count is deliberately not quoted here: it went stale twice in one day, and
 `npm test` prints it. It has been run against synthetic traffic, against traffic minted by the
 authors own signing code, and end to end through a tunnel at a real hostname on 443. That last
 one is not a past event. Every lease is preceded by a control in which this grader drives
 itself with the authors own signing code, including one leg through the public hostname, and
 refuses to grade at all unless every rule that control exercises passes. On a deployment that
-verifies delegations, which the live one does, the control covers thirty one of the
-thirty seven rules. The six it cannot exercise are rules its own traffic never reaches:
+verifies delegations, which the live one does, the control covers thirty two of the
+forty rules. The eight it cannot exercise are rules its own traffic never reaches:
 `session.ath`, because this grader issues no access tokens so there is no `ath` to send;
 `session.stops-after-refusal`, because the control is conforming traffic and this Company refuses
 none of it, so there is no refusal to stop sending after; `signin.not-when-disabled`, because the control sends no
 token request at all, this Company issuing no tokens; `conversation.context-fields`, because the canary shares no
 locale, time zone or availability, none of which a Session needs; `session.operator-signature-covers`, because the canary signs
-Session JWTs and does no Web Bot Auth signing, so it sends no operator signature; and
-`version.extensions-listed`, because this Company lists no extensions, so nothing conforming
-declares one. Each is judged only for a builder whose own run reaches it.
+Session JWTs and does no Web Bot Auth signing, so it sends no operator signature; `version.extensions-listed`, because this Company lists
+no extensions, so nothing conforming declares one; `conversation.wait-seconds`, because the
+canary reads no events; and `session.not-in-a-url`, because it sends no query at all. Each is
+judged only for a builder whose own run reaches it.
 
 It has been run against agents nobody here wrote: the authors own kit validator, acting as a
 Personal Agent, which had every breach it deliberately sent caught, and three Personal Agent

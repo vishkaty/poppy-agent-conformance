@@ -64,6 +64,9 @@ export const ENFORCE_EXCLUDED = {
   // `invalid_session` and `version_unsupported` only, so refusing from here would answer the
   // wrong error for the breach; the conversation handler already answers it where the
   // specification does.
+  "conversation.wait-seconds": "8.13 puts a `wait` that is not a whole number of seconds under `invalid_request`, and this path answers `invalid_session` or `version_unsupported` only, so enforcing it here would name the wrong error. The events route already answers it where the specification puts it.",
+  "session.sid-characters": "5.3 names the Session header checks a Company makes and the alphabet of a `sid` is not among them, so refusing on it would be stricter than the verification the specification describes. Reported instead.",
+  "session.not-in-a-url": "5.6 forbids both sides, so this Company must not ACCEPT a token from a URL either, and that is a change to what it serves rather than a verdict this path can give. Reported until that is built.",
   "version.extensions-listed": "3.4 names its own answer for this: without the header, or when it fails to parse, the Company treats the request as using no extensions, which is what this Company does. Refusing instead would answer a request the specification tells it to serve.",
   "session.operator-signature-covers": "the signature is the operator identifying itself to bot defences, not the Session this path verifies, and 5.3 gives no error for a signature that covers too little. Refusing on it would invent an answer the specification does not name.",
   "conversation.context-fields": "8.13 puts a malformed field under `invalid_request`, and this path answers `invalid_session` or `version_unsupported` only, so enforcing it here would name the wrong error. This Company serves a context it cannot read rather than refusing one, because 8.4 gives these facts to the Company Agent and a Company that rejected a bad locale would be stricter than the text.",

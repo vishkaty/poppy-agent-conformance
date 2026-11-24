@@ -990,3 +990,56 @@ test("the extensions rule abstains on what it cannot read, and on requests witho
   assert.equal(bad.verdict, "INCONCLUSIVE", `an unreadable header was treated as a breach: ${bad.why}`);
   assert.equal(bad.cause, "grader");
 });
+
+// Three more from the coverage map, each small. The first closes another disagreement: this
+// Company refuses a `wait` that is not a whole number and no rule faulted it.
+test("a wait that is not a whole number of seconds is faulted", async () => {
+  const keys = await f.agentKeys();
+  const id = "conversation.wait-seconds";
+  const events = async (query) => f.request(keys, {
+    path: "/poppy/conversations/c_1/events", conversationRoute: "events", sub: "user-one",
+    htu: `https://shop.example/poppy/conversations/c_1/events`, pathQuery: query });
+  const verdict = async (query) => grade([await events(query)], f.ctx).find(x => x.id === id);
+
+  assert.equal((await verdict("?wait=30")).verdict, "PASS", "a whole number of seconds");
+  assert.equal((await verdict("?wait=0")).verdict, "PASS", "8.5 allows zero");
+  assert.equal((await verdict("")).verdict, "INCONCLUSIVE", "no wait is nothing to judge");
+  assert.equal((await verdict("?wait=abc")).verdict, "FAIL", "not a number at all");
+  assert.equal((await verdict("?wait=1.5")).verdict, "FAIL", "not a whole number");
+  assert.equal((await verdict("?wait=-1")).verdict, "FAIL", "8.5 says 0 or more");
+});
+
+test("a sid outside the alphabet 8.2 defines is faulted", async () => {
+  const keys = await f.agentKeys();
+  const id = "session.sid-characters";
+  const verdict = async (sid) => grade([await f.request(keys, { sid, sub: "user-one" })], f.ctx)
+    .find(x => x.id === id);
+  assert.equal((await verdict("s_1-A_b")).verdict, "PASS", "letters, digits, hyphen and underscore");
+  assert.equal((await verdict("s+1/2=")).verdict, "FAIL", "standard base64 is not the URL safe alphabet");
+  assert.equal((await verdict("a".repeat(257))).verdict, "FAIL", "8.2 allows 1 to 256 characters");
+});
+
+test("a Session JWT or a token in a URL is faulted", async () => {
+  const keys = await f.agentKeys();
+  const id = "session.not-in-a-url";
+  const verdict = async (query) => grade([await f.request(keys, {
+    path: "/poppy/orders", sub: "user-one", pathQuery: query })], f.ctx).find(x => x.id === id);
+  assert.equal((await verdict("?page=2")).verdict, "PASS", "an ordinary query parameter");
+  // Nothing to judge rather than a pass: a run with no query anywhere has not reached the point
+  // the sentence governs, and a PASS there would be a pass on silence.
+  assert.equal((await verdict("")).verdict, "INCONCLUSIVE", "no query at all is nothing to judge");
+  assert.equal((await verdict("?session=eyJhbGciOiJFUzI1NiIsInR5cCI6InBvcHB5LXNlc3Npb24ran" +
+                              "d0In0.eyJpc3MiOiJ4In0.c2ln")).verdict, "FAIL",
+    "a compact JWT in a query parameter is a Session JWT in a URL");
+  assert.equal((await verdict("?access_token=Bearer%20abc123")).verdict, "FAIL",
+    "a bearer token in a query parameter");
+
+  // The false positive this rule would otherwise have shipped with, and a mutation proved the
+  // claim was untested: three dot separated runs of base64url characters describe a version
+  // string as well as a JWT. A value counts only when its first segment really decodes to a JWS
+  // header with an `alg`.
+  assert.equal((await verdict("?v=1.2.3")).verdict, "PASS",
+    "a version string is not a JWT, and matching its shape would fault an ordinary query");
+  assert.equal((await verdict("?ref=a.b.c")).verdict, "PASS",
+    "three dot separated words are not a JWT either");
+});
