@@ -64,6 +64,8 @@ export const ENFORCE_EXCLUDED = {
   // `invalid_session` and `version_unsupported` only, so refusing from here would answer the
   // wrong error for the breach; the conversation handler already answers it where the
   // specification does.
+  "conversation.message-content": "8.13 lists a message with no content (8.4) under `invalid_request`, and this path answers `invalid_session` or `version_unsupported` only, so enforcing it here would name the wrong error. The conversation handler already refuses it where the specification puts it.",
+  "conversation.message-author": "8.13 does not ask a Company to refuse a message that fails to say whether a person or an AI wrote it, so this Company serves it and the rule reports it. Refusing where the specification does not would make this grader stricter than the text.",
   "conversation.id-format": "8.13 lists an ID with characters not allowed (8.2) under `invalid_request`, and this path answers `invalid_session` or `version_unsupported` only, so enforcing it here would name the wrong error. The conversation handler refuses such an id where the specification puts it.",
   "conversation.request-id": "8.13 puts a missing request id under `invalid_request`, and this path answers `invalid_session` or `version_unsupported` only, so enforcing it here would name the wrong error. The conversation handler answers it where the specification puts it.",
 

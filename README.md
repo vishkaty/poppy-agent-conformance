@@ -9,7 +9,7 @@ Personal Agent puts on the wire, which only the Company it is talking to can see
 
 ## What it does
 
-Twenty nine checks over a recorded request log. Twenty seven need one Company. Two need
+Thirty one checks over a recorded request log. Twenty nine need one Company. Two need
 two Companies, because the rules they test are pairwise: a User ID must differ per Company
 (spec 5.1) and a delegated key must sign for one User ID only (spec 5.2), so no single
 Company can observe either.
@@ -29,9 +29,11 @@ It does not look at most of what 1.0 asks of an agent, and that is the honest he
 section. The twenty nine rules are concentrated almost entirely on one layer: the Session header
 of 5.2 and the delegation that vouches for it, which is the layer a Company depends on to know who
 is calling. On that layer the coverage is close to exhaustive. Outside it, the gaps are large and
-specific. Nothing here checks what an agent puts in a conversation message, so 8.4 and 8.8, which
-include the one place the protocol makes an agent say whether a person or an AI is speaking, go
-unexamined. Nothing checks the recovery the specification prescribes after an error, so an agent
+specific. Two rules now read the message itself, so a message with none of the content fields 8.4
+requires is faulted, and so is one that never says whether a person or an AI wrote it under 8.8,
+which is the one disclosure the protocol asks an agent to make about itself. Whether `human` was
+the truthful answer is not decidable from the wire and the verdict says so. Nothing checks the
+recovery the specification prescribes after an error, so an agent
 that retries a request section 7 tells it to stop sending is not faulted. Nothing reads
 `Poppy-Extensions` or an operator signature. And nothing in sections 4, 6 or 9, nor in any
 extension, can be reached at all by a Company that sets `auth.disabled`, serves no website and
@@ -156,13 +158,15 @@ Session. Telling an agent the wrong one sends it into a loop.
 instruction to `invalid_session`, and this Company ends no Session and holds no account, so no
 failure here can be one.
 
-Eight rules are reported and never refused, each with its reason in `enforce.mjs`: the three
-that need more than one request to decide, the one about documents, the two privacy rules,
-which are the most contestable accusations this grader makes and so are never used to close a
-door, and the two conversation id rules, the request id of 8.3 and the id alphabet of 8.2, whose
-answers 8.13 puts under `invalid_request` while this path speaks `invalid_session` only, so the
-conversation handler answers them instead. The count was wrong here twice and the list beside it
-once, which is why a test derives the count and the paragraph names every rule it covers.
+Ten rules are reported and never refused, each with its reason in `enforce.mjs`: the three that
+need more than one request to decide, the one about documents, the two privacy rules, which are
+the most contestable accusations this grader makes and so are never used to close a door, the
+request id of 8.3, the id alphabet of 8.2 and a message with no content under 8.4, whose answers
+8.13 puts under `invalid_request` while this path speaks `invalid_session` only, so the
+conversation handler answers those instead, and the message author of 8.8, which 8.13 does not ask
+a Company to refuse at all, so this Company serves it and the rule reports it. The count was wrong
+here twice and the list beside it once, which is why a test derives the count and the paragraph
+names every rule it covers.
 
 ## Enough of section 8 that an agent can finish a conversation
 
@@ -656,15 +660,15 @@ than a citation.
 
 Early, and honest about what has been measured.
 
-Twenty nine rules, and 121 mutations that each break one guard and require a named test
+Thirty one rules, and 125 mutations that each break one guard and require a named test
 to notice. The test count is deliberately not quoted here: it went stale twice in one day, and
 `npm test` prints it. It has been run against synthetic traffic, against traffic minted by the
 authors own signing code, and end to end through a tunnel at a real hostname on 443. That last
 one is not a past event. Every lease is preceded by a control in which this grader drives
 itself with the authors own signing code, including one leg through the public hostname, and
 refuses to grade at all unless every rule that control exercises passes. On a deployment that
-verifies delegations, which the live one does, the control covers twenty eight of the twenty
-nine rules. The one it cannot exercise is `session.ath`: this grader issues no access tokens,
+verifies delegations, which the live one does, the control covers thirty of the thirty
+one rules. The one it cannot exercise is `session.ath`: this grader issues no access tokens,
 so a conforming agent sends no `ath` here, and the rule is judged only for a builder who points
 a signed-in code path at it with a token of their own.
 

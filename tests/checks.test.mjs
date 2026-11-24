@@ -516,7 +516,8 @@ test("one mistake in a request id is one FAIL, not two", async () => {
   for (const bad of [123, "", null, { nested: true }]) {
     const rec = await f.request(keys, { method: "POST", path: "/poppy/conversations",
                                         conversationRoute: "start", sub: "user-one",
-                                        body: JSON.stringify({ id: bad, message: { text: "x" } }) });
+                                        // an author, so the id is the ONLY mistake in this body
+                                        body: JSON.stringify({ id: bad, message: { author: { type: "agent" }, text: "x" } }) });
     const failed = grade([rec], f.ctx).filter(v => v.verdict === "FAIL" && v.id.startsWith("conversation."));
     assert.deepEqual(failed.map(v => v.id), ["conversation.request-id"],
       `id ${JSON.stringify(bad)} was faulted by ${failed.length} rules: ${failed.map(v => v.id).join(", ")}`);
@@ -524,7 +525,92 @@ test("one mistake in a request id is one FAIL, not two", async () => {
   // And a usable id with characters 8.2 forbids is the format rule's own business, alone.
   const wrongAlphabet = await f.request(keys, { method: "POST", path: "/poppy/conversations",
                                                 conversationRoute: "start", sub: "user-one",
-                                                body: JSON.stringify({ id: "msg 1/2", message: { text: "x" } }) });
+                                                body: JSON.stringify({ id: "msg 1/2", message: { author: { type: "agent" }, text: "x" } }) });
   const failed = grade([wrongAlphabet], f.ctx).filter(v => v.verdict === "FAIL" && v.id.startsWith("conversation."));
   assert.deepEqual(failed.map(v => v.id), ["conversation.id-format"]);
+});
+
+// 8.4 and 8.8, the message itself. The top of the coverage map: this Company already answers
+// `invalid_request` for a message with no content while no rule faulted it, and it accepts a
+// message that never says whether a person or an AI is speaking, which is the one disclosure the
+// protocol asks an agent to make.
+const convPost = async (keys, body, over = {}) => f.request(keys, {
+  method: "POST", path: "/poppy/conversations", conversationRoute: "start", sub: "user-one",
+  body: JSON.stringify(body), ...over });
+
+test("a message with no content is faulted, and every kind of content is accepted", async () => {
+  const keys = await f.agentKeys();
+  const verdict = async (message) => {
+    const rec = await convPost(keys, { id: "r1", message });
+    return grade([rec], f.ctx).find(x => x.id === "conversation.message-content");
+  };
+  assert.equal((await verdict({ author: { type: "agent" } })).verdict, "FAIL",
+    "a message with none of text, data, context or extensions must be faulted");
+  for (const content of [{ text: "hello" }, { data: { a: 1 } }, { context: { locale: "en-US" } },
+                         { extensions: { "x": {} } }])
+    assert.equal((await verdict({ author: { type: "agent" }, ...content })).verdict, "PASS",
+      `8.4 allows ${Object.keys(content)[0]} alone`);
+  // An empty string is content the agent chose to send. 8.4 asks for one of the four fields to be
+  // there, and says nothing about what is in it, so this rule says nothing either.
+  assert.equal((await verdict({ author: { type: "agent" }, text: "" })).verdict, "PASS",
+    "8.4 asks for the field, not for what is in it");
+});
+
+test("a message that never says whether a person or an AI is speaking is faulted", async () => {
+  const keys = await f.agentKeys();
+  const verdict = async (message) => {
+    const rec = await convPost(keys, { id: "r1", message });
+    return grade([rec], f.ctx).find(x => x.id === "conversation.message-author");
+  };
+  assert.equal((await verdict({ text: "hello" })).verdict, "FAIL", "no author at all");
+  assert.equal((await verdict({ text: "hello", author: {} })).verdict, "FAIL", "an author with no type");
+  assert.equal((await verdict({ text: "hello", author: { type: "robot" } })).verdict, "FAIL",
+    "8.8 defines two values and robot is not one of them");
+  for (const type of ["agent", "human"])
+    assert.equal((await verdict({ text: "hello", author: { type } })).verdict, "PASS", type);
+  // And it must say plainly what it cannot know: a Company never sees the User's own words, so
+  // whether `human` was the truthful choice is not decidable from the wire.
+  const ok = await verdict({ text: "hello", author: { type: "human" } });
+  assert.match(ok.why, /cannot|not decidable|never sees/i,
+    `the verdict must admit it cannot judge which value is truthful: ${ok.why}`);
+});
+
+test("neither message rule accuses an agent over a request this grader could not read", async () => {
+  // The four ways the 8.3 rule accused conforming agents, applied to these two before they ship.
+  const keys = await f.agentKeys();
+  const ids = ["conversation.message-content", "conversation.message-author"];
+  const cases = {
+    "a body cut at our cap": { body: '{"id":"r1","mes', bodyTruncated: true },
+    "a body that never arrived": { body: '{"id":"r1","mes', bodyComplete: false },
+    // The case that actually distinguishes the guard, found by a mutation that survived without
+    // it: a body that PARSES and is still not the whole request. A socket can drop after a
+    // complete JSON body arrived but before the request ended, and the kept bytes are then valid
+    // JSON missing nothing visible. Judged, that message looks like one with no author.
+    "a parseable body that is not the whole request":
+      { body: JSON.stringify({ id: "r1", message: { text: "x" } }), bodyComplete: false },
+    "a parseable body cut at the cap":
+      { body: JSON.stringify({ id: "r1", message: { text: "x" } }), bodyTruncated: true },
+    "a target we refused to classify": { unsafeTarget: true, isResource: false,
+                                         body: JSON.stringify({ id: "r1", message: { text: "x" } }) },
+  };
+  for (const [what, over] of Object.entries(cases)) {
+    const rec = await convPost(keys, { id: "r1", message: { text: "x" } }, over);
+    for (const id of ids) {
+      const v = grade([rec], f.ctx).find(x => x.id === id);
+      assert.notEqual(v.verdict, "FAIL", `${id} accused an agent over ${what}: ${v.why}`);
+    }
+  }
+  // A conversation route that carries no message is not a message with something missing.
+  const close = await f.request(keys, { method: "POST", path: "/poppy/conversations/c_1/close",
+                                        conversationRoute: "close", sub: "user-one",
+                                        body: JSON.stringify({ id: "r9" }) });
+  for (const id of ids) {
+    const v = grade([close], f.ctx).find(x => x.id === id);
+    assert.equal(v.verdict, "INCONCLUSIVE", `${id} faulted a route that carries no message: ${v.why}`);
+  }
+  // And a POST to a listed API is not a conversation at all.
+  const api = await f.request(keys, { method: "POST", path: "/poppy/orders",
+                                      body: JSON.stringify({ item: "x" }) });
+  for (const id of ids)
+    assert.equal(grade([api], f.ctx).find(x => x.id === id).verdict, "INCONCLUSIVE");
 });

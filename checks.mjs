@@ -957,6 +957,60 @@ export const CHECKS = [
         : PASS(`${ids.length} request id(s) are letters, digits, hyphen or underscore, 1 to 256 characters`);
     },
   },
+  {
+    id: "conversation.message-content",
+    section: "8.4",
+    quote: "A message MUST have at least one of `text`, `data`, `context`, or `extensions`.",
+    // This Company already answers `invalid_request` for a message with none of them, as 8.13
+    // says it should, while nothing here faulted it. A report that showed a request this Company
+    // refused beside a verdict finding nothing wrong is the disagreement this grader exists to
+    // prevent, and it was live on the main interface of the protocol.
+    //
+    // It asks for one of the four fields to be present and says nothing about what is in it, so
+    // neither does this rule: an empty string is content the agent chose to send.
+    run(log) {
+      const { posts, messages, unreadable } = agentMessages(log);
+      if (!messages.length)
+        return posts.length && unreadable.length === posts.length
+          ? SKIP(`${unreadable.length} conversation POST(s) arrived with a body this grader did not keep in full`, "grader")
+          : SKIP("no POST to a conversation route carried a message this grader could read");
+      const FIELDS = ["text", "data", "context", "extensions"];
+      const empty = messages.filter(({ message }) => !FIELDS.some(k => message[k] !== undefined));
+      return empty.length
+        ? FAIL("a message carried none of text, data, context or extensions, which 8.4 requires",
+               empty.slice(0, 3).map(({ r }) => `${r.method} ${r.path}`), empty.map(({ r }) => r))
+        : PASS(`${messages.length} message(s) each carried at least one of text, data, context or extensions`);
+    },
+  },
+  {
+    id: "conversation.message-author",
+    section: "8.8",
+    quote: "the Personal Agent MUST set each message's `author.type`: `agent` when the Personal Agent wrote it, and `human` only when it carries the User's own words",
+    // The one disclosure the protocol asks an agent to make about itself, and nothing here looked
+    // at it: a message with no author at all was answered 201 and reported clean.
+    //
+    // What is judged is narrow on purpose. A Company can see whether the agent said `agent` or
+    // `human`, and it can see a value 8.8 does not define. It cannot see WHICH is truthful,
+    // because it never sees the User's own words, and 8.8 itself draws a line a Company cannot
+    // check when it says a summary, paraphrase or translation of what the User said is `agent`.
+    // So this rule reports presence and the allowed values, and says in the verdict what it
+    // cannot know, rather than implying it verified the honesty of the answer.
+    run(log) {
+      const { posts, messages, unreadable } = agentMessages(log);
+      if (!messages.length)
+        return posts.length && unreadable.length === posts.length
+          ? SKIP(`${unreadable.length} conversation POST(s) arrived with a body this grader did not keep in full`, "grader")
+          : SKIP("no POST to a conversation route carried a message this grader could read");
+      const ALLOWED = ["agent", "human"];
+      const bad = messages.filter(({ message }) =>
+        !message.author || typeof message.author !== "object" || !ALLOWED.includes(message.author.type));
+      return bad.length
+        ? FAIL("a message did not say whether a person or an AI wrote it: 8.8 defines `agent` and `human` and no other value",
+               bad.slice(0, 3).map(({ r, message }) => `${r.method} ${r.path}: author.type ${JSON.stringify(message.author?.type)}`),
+               bad.map(({ r }) => r))
+        : PASS(`${messages.length} message(s) each said agent or human. Which of the two is truthful is not decidable from the wire, because this Company never sees the User's own words`);
+    },
+  },
 ];
 
 // The cross-Company checks. These need logs from BOTH hostnames, and they are the reason
@@ -978,6 +1032,26 @@ function firstFetchReason(s) {
 // 8.3 defines a retry by its path and its id and says nothing about member order, and the hosted
 // Company compares the parsed body, so comparing raw bytes made this grader stricter than the
 // Company it ships with.
+// The agent's own messages, from the conversation POSTs of 8.2. Shared by the two rules about a
+// message so they cannot disagree about what counts as one, and scoped exactly as the request id
+// rules are, for the reasons those rules had to learn: a body this grader did not keep in full is
+// our cap or a dropped socket and never a breach, and a target we refused to classify says in its
+// own record that no rule examined it. A route that carries no message, such as close or cancel,
+// is not a message with something missing.
+function agentMessages(log) {
+  const posts = log.filter(r => r.method === "POST" && r.conversationRoute
+                                && !r.unsafeTarget && !r.refused);
+  const messages = [], unreadable = [];
+  for (const r of posts) {
+    if (r.bodyComplete === false || r.bodyTruncated) { unreadable.push(r); continue; }
+    let parsed = null;
+    try { parsed = JSON.parse(r.body ?? ""); } catch { parsed = null; }
+    const m = parsed?.message;
+    if (m && typeof m === "object" && !Array.isArray(m)) messages.push({ r, message: m });
+  }
+  return { posts, messages, unreadable };
+}
+
 function canonicalJson(v) {
   if (Array.isArray(v)) return `[${v.map(canonicalJson).join(",")}]`;
   if (v && typeof v === "object")

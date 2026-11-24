@@ -38,6 +38,16 @@ export const BREACH = {
   // A request carrying the Session header and no Poppy-Version, which 3.4 makes a per-request
   // failure with its own error. The historical rule below is a different breach: two values
   // inside one Session.
+  // A message with none of the four content fields. This Company already answers
+  // `invalid_request` for it, as 8.13 says, so a rule had to fault it too.
+  "conversation.message-content": async () => [await f.request(keys, { method: "POST", path: "/poppy/conversations",
+                                                                       conversationRoute: "start", sub: "user-one",
+                                                                       body: JSON.stringify({ id: "r1", message: { author: { type: "agent" } } }) })],
+  // A message that never says whether a person or an AI wrote it. Nothing refuses this, which is
+  // why it needs a rule: it was answered 201 and reported clean.
+  "conversation.message-author":  async () => [await f.request(keys, { method: "POST", path: "/poppy/conversations",
+                                                                       conversationRoute: "start", sub: "user-one",
+                                                                       body: JSON.stringify({ id: "r1", message: { text: "hello" } }) })],
   // A request id with characters 8.2 does not allow. 8.13 lists "an ID with characters not
   // allowed (8.2)" under invalid_request, and this Company answers exactly that, so a rule had
   // to fault it or the status and the verdict disagreed about one request.

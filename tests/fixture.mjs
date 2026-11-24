@@ -87,6 +87,15 @@ export async function request(keys, over = {}) {
     },
     body: over.body ?? "",
     conversationRoute: over.conversationRoute ?? null,
+    // Carried through, because a test that says a body was truncated or that a target was refused
+    // and is then silently given a clean record is a test that proves the opposite of what it
+    // reads. Two rules were nearly shipped on exactly that: the fixture dropped these fields and
+    // the "does not accuse" cases passed for free.
+    ...(over.bodyComplete !== undefined ? { bodyComplete: over.bodyComplete } : {}),
+    ...(over.bodyTruncated !== undefined ? { bodyTruncated: over.bodyTruncated } : {}),
+    ...(over.unsafeTarget !== undefined ? { unsafeTarget: over.unsafeTarget } : {}),
+    ...(over.refused !== undefined ? { refused: over.refused } : {}),
+    ...(over.isResource !== undefined ? { isResource: over.isResource } : {}),
     issuerKeys: issuerKeysFor(keys, over),
   };
 }
@@ -118,7 +127,12 @@ export async function conformingLog(keys, over = {}) {
     // sends one, and the record carries which conversation route it is, so the rule about
     // request IDs has something to pass on.
     request(keys, { ...over, sid, sub, dlgCompact, method: "POST", path: "/poppy/conversations",
-                    body: JSON.stringify({ id: "req-" + randomUUID(), message: { text: "hello" } }),
+                    // 8.4 wants one of text, data, context or extensions; 8.8 wants the agent to
+                    // say whether a person or an AI wrote it. A control that omitted either would
+                    // make those rules abstain, and a control that abstains proves less than one
+                    // that passes.
+                    body: JSON.stringify({ id: "req-" + randomUUID(),
+                                           message: { author: { type: "agent" }, text: "hello" } }),
                     conversationRoute: "start" }),
     request(keys, { ...over, sid, sub, dlgCompact, path: "/poppy/orders/2",
                     token, ath: createHash("sha256").update(token).digest("base64url") }),

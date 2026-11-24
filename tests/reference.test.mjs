@@ -90,7 +90,8 @@ test("traffic built by the authors' own signing code passes every check", async 
     // abstain on that rule, and a control that abstains proves less than one that passes.
     await referenceRequest(CTX_A, { ...id, method: "POST", path: "/poppy/conversations",
                                     conversationRoute: "start",
-                                    body: JSON.stringify({ id: `ref_${ref.randomId(8)}`, message: { text: "hello" } }) }),
+                                    body: JSON.stringify({ id: `ref_${ref.randomId(8)}`,
+                                                           message: { author: { type: "agent" }, text: "hello" } }) }),
     await referenceRequest(CTX_A, { ...id, path: "/poppy/orders/2", token }),
   ];
   const out = grade(log, CTX_A);

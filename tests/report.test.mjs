@@ -465,7 +465,9 @@ test("a request the Company refused outside the rules is visible, and the key-se
   const keys = await f.agentKeys();
   const refused = await f.request(keys, { method: "POST", path: "/poppy/conversations",
                                           conversationRoute: "start", sub: "user-one",
-                                          body: JSON.stringify({ id: "r1", message: { text: "hello" } }) });
+                                          // an author too, because the refusal here is outside the
+                                          // rules and the record must not breach one
+                                          body: JSON.stringify({ id: "r1", message: { author: { type: "agent" }, text: "hello" } }) });
   refused.issuerKeys = { outcome: "grader", detail: "could not resolve agent.example: getaddrinfo ENOTFOUND agent.example" };
   refused.response = { status: 400, error: "invalid_session" };
   const log = [refused];

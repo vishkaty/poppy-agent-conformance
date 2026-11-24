@@ -39,6 +39,7 @@ export const CANARY_RULES = [
   // The canary's own conversation POST carries a request id (8.3), so this rule is exercised
   // by the control rather than excluded from it.
   "conversation.request-id", "conversation.id-format",
+  "conversation.message-content", "conversation.message-author",
   "pairwise.user-id", "pairwise.delegated-key",
 ];
 
