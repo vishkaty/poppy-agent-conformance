@@ -343,6 +343,16 @@ export const MUTATIONS = [
     kills: "is not a web page",
     find: "  for (const op of cfg.apiOperations ?? [])\n    if (matchesTemplate(path, op.template))",
     to: "  for (const op of [])\n    if (matchesTemplate(path, op.template))" },
+  // 5.3's operator signature: what it must cover.
+  { id: "checks/signature-cover-unchecked", file: "checks.mjs", tests: "tests/checks.test.mjs",
+    kills: "operator signature that does not cover the Session header is faulted",
+    find: "        if (!covered.includes(\"poppy-session\")) missing.push(\"poppy-session\");", to: "" },
+  { id: "checks/signature-ignores-authorization", file: "checks.mjs", tests: "tests/checks.test.mjs",
+    kills: "operator signature that does not cover the Session header is faulted",
+    find: "        if (r.headers?.authorization !== undefined && !covered.includes(\"authorization\"))\n          missing.push(\"authorization\");", to: "" },
+  { id: "checks/signature-faults-unparseable", file: "checks.mjs", tests: "tests/checks.test.mjs",
+    kills: "judges only requests that carry one",
+    find: "        if (!covered) { unreadable.push(r); continue; }", to: "        if (!covered) { bad.push({ r, missing: [\"poppy-session\"] }); continue; }" },
   // 8.4's context fields.
   { id: "checks/context-formats-unchecked", file: "checks.mjs", tests: "tests/checks.test.mjs",
     kills: "context fields are judged by format",

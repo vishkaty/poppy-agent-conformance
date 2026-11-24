@@ -1199,6 +1199,52 @@ export const CHECKS = [
         : PASS(`${shared.length} message(s) shared a context in the formats 8.4 defines, as far as this grader can decide: a language tag is checked for well formedness and a time zone only for being a name this runtime knows, so a legacy abbreviation passes because nothing here can tell it from an alias`);
     },
   },
+  {
+    id: "session.operator-signature-covers",
+    section: "5.3",
+    quote: "The Personal Agent's operator signature MUST cover `poppy-session`, and `authorization` when present",
+    // 5.3 makes signing with Web Bot Auth a SHOULD and then makes what the signature covers a
+    // MUST. This rule carries the MUST, and the reason it matters is that Web Bot Auth's own
+    // defaults do not cover `poppy-session`: a builder following that draft alone signs the method
+    // and the target and binds neither the Session JWT nor the access token, which is the whole
+    // point of the sentence.
+    //
+    // A request with no signature is not judged here. Signing at all is the SHOULD in the previous
+    // sentence, and a rule may not borrow a neighbouring sentence to turn an absence into a fault.
+    //
+    // The covered components are read out of `Signature-Input` as the quoted identifiers inside
+    // the parentheses, which is enough for this question and is not a full RFC 9421 parser. A
+    // header this cannot read abstains as our limit rather than faulting the agent, because the
+    // alternative is accusing an agent of not covering something on the strength of our own
+    // inability to see the list.
+    run(log) {
+      const signed = log.filter(r => typeof r.headers?.["signature-input"] === "string");
+      if (!signed.length)
+        return SKIP("no request carried an operator signature, and signing at all is a SHOULD of 5.3 rather than this sentence");
+      const componentsOf = (v) => {
+        const inside = /\(([^)]*)\)/.exec(String(v));
+        if (!inside) return null;
+        return [...inside[1].matchAll(/"([^"]+)"/g)].map(m => m[1].toLowerCase());
+      };
+      const unreadable = [], bad = [];
+      for (const r of signed) {
+        const covered = componentsOf(r.headers["signature-input"]);
+        if (!covered) { unreadable.push(r); continue; }
+        const missing = [];
+        if (!covered.includes("poppy-session")) missing.push("poppy-session");
+        if (r.headers?.authorization !== undefined && !covered.includes("authorization"))
+          missing.push("authorization");
+        if (missing.length) bad.push({ r, missing });
+      }
+      if (bad.length)
+        return FAIL("an operator signature does not cover what 5.3 requires it to, so it binds neither the Session JWT nor the access token",
+                    bad.slice(0, 3).map(b => `${b.r.method} ${b.r.path}: not covered, ${b.missing.join(" and ")}`),
+                    bad.map(b => b.r));
+      if (unreadable.length === signed.length)
+        return SKIP(`${unreadable.length} request(s) carried a Signature-Input this grader could not read a component list out of`, "grader");
+      return PASS(`${signed.length - unreadable.length} signed request(s) cover poppy-session, and authorization wherever a token was sent`);
+    },
+  },
 ];
 
 // The cross-Company checks. These need logs from BOTH hostnames, and they are the reason

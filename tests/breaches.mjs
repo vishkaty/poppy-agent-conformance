@@ -38,6 +38,11 @@ export const BREACH = {
   // A request carrying the Session header and no Poppy-Version, which 3.4 makes a per-request
   // failure with its own error. The historical rule below is a different breach: two values
   // inside one Session.
+  // An operator signature that covers the method and the target and not the Session header, which
+  // is what Web Bot Auth's own defaults produce.
+  "session.operator-signature-covers": async () => [await f.request(keys, {
+    path: "/poppy/orders", sub: "user-one",
+    headers: { "signature-input": 'sig1=("@method" "@target-uri");keyid="k"', signature: "sig1=:abc:" } })],
   // A context field in the wrong format. 8.4 names a language tag of RFC 5646, and an underscore
   // where a hyphen belongs is the mistake a developer actually makes.
   "conversation.context-fields": async () => [await f.request(keys, {
@@ -202,6 +207,8 @@ export const CONFORMING_UNREACHED = {
 // a shared list would have to claim a rule is unreachable in traffic that reaches it.
 export const REFERENCE_UNREACHED = {
   ...CONFORMING_UNREACHED,
+  "session.operator-signature-covers":
+    "this control is built with the authors own signing helpers, which mint Session JWTs and delegations and do no Web Bot Auth signing, so its requests carry no operator signature for 5.3's sentence to judge",
   "signin.not-when-disabled":
     "this control is Session traffic built with the authors own helpers and sends no token request, so there is no grant for 3.2's prohibition to be judged on",
 };

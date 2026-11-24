@@ -890,3 +890,46 @@ test("the context fields are judged by format, and only as far as the runtime ca
                                             body: JSON.stringify({ id: "r1", message: { author: { type: "agent" }, text: "x" } }) });
   assert.equal(grade([noContext], f.ctx).find(x => x.id === id).verdict, "INCONCLUSIVE");
 });
+
+// 5.3's operator signature. Item 5 of the coverage map, second of three. 5.3 makes signing a
+// SHOULD and then makes what the signature covers a MUST, and this rule carries the MUST: Web Bot
+// Auth's own defaults do not cover `poppy-session`, so a builder following that draft alone misses
+// it and nothing here said so.
+test("an operator signature that does not cover the Session header is faulted", async () => {
+  const keys = await f.agentKeys();
+  const id = "session.operator-signature-covers";
+  const signed = async (input, over = {}) => f.request(keys, {
+    path: "/poppy/orders", sub: "user-one",
+    headers: { "signature-input": input, signature: "sig1=:abc:" }, ...over });
+  const verdict = async (input, over) => grade([await signed(input, over)], f.ctx).find(x => x.id === id);
+
+  assert.equal((await verdict('sig1=("@method" "@target-uri" "poppy-session");keyid="k"')).verdict,
+               "PASS", "a signature covering poppy-session is what 5.3 asks for");
+  assert.equal((await verdict('sig1=("@method" "@target-uri");keyid="k"')).verdict,
+               "FAIL", "Web Bot Auth defaults leave poppy-session out, which 5.3 forbids");
+
+  // And `authorization` when present, which the same sentence requires.
+  const withToken = { token: "tok-1" };
+  assert.equal((await verdict('sig1=("poppy-session");keyid="k"', withToken)).verdict, "FAIL",
+               "an access token was sent and the signature does not bind it");
+  assert.equal((await verdict('sig1=("poppy-session" "authorization");keyid="k"', withToken)).verdict,
+               "PASS", "covering both is the whole sentence");
+});
+
+test("the operator signature rule judges only requests that carry one", async () => {
+  const keys = await f.agentKeys();
+  const id = "session.operator-signature-covers";
+  // No signature at all: 5.3 makes signing a SHOULD, and that is a different sentence from the one
+  // this rule carries. Saying nothing is the honest outcome, not a quiet pass.
+  const plain = await f.request(keys, { path: "/poppy/orders", sub: "user-one" });
+  const none = grade([plain], f.ctx).find(x => x.id === id);
+  assert.equal(none.verdict, "INCONCLUSIVE");
+  assert.equal(none.cause, "unreached");
+
+  // A Signature-Input this grader cannot parse is our limit, not a breach.
+  const garbled = await f.request(keys, { path: "/poppy/orders", sub: "user-one",
+                                          headers: { "signature-input": "not a structured field" } });
+  const bad = grade([garbled], f.ctx).find(x => x.id === id);
+  assert.equal(bad.verdict, "INCONCLUSIVE", `an unparseable header was treated as a breach: ${bad.why}`);
+  assert.equal(bad.cause, "grader");
+});

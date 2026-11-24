@@ -111,6 +111,14 @@ export async function request(keys, over = {}) {
 }
 
 // A short conforming session: three requests, one Session, stable sub.
+// An operator signature as Web Bot Auth produces one, covering what 5.3 makes a MUST. The
+// component list is what the rule reads; the signature value itself is never verified here,
+// because 5.3 gives that to the key directory and this grader holds no operator keys.
+const SIGNED = { "signature-input": 'sig1=("@method" "@target-uri" "poppy-session");keyid="operator"',
+                 signature: "sig1=:ZmFrZQ==:" };
+const SIGNED_WITH_TOKEN = { "signature-input": 'sig1=("@method" "@target-uri" "poppy-session" "authorization");keyid="operator"',
+                            signature: "sig1=:ZmFrZQ==:" };
+
 export async function conformingLog(keys, over = {}) {
   const sid = "sid-" + randomUUID(), sub = "user-" + randomUUID();
   const dlgCompact = await delegation(keys);
@@ -143,8 +151,12 @@ export async function conformingLog(keys, over = {}) {
   };
   return Promise.all([
     discovery, refresh,
-    request(keys, { ...over, sid, sub, dlgCompact, path: "/poppy/orders" }),
-    request(keys, { ...over, sid, sub, dlgCompact, path: "/poppy/orders/1" }),
+    // 5.3: a conforming agent SHOULD sign these with Web Bot Auth, and the signature MUST cover
+    // `poppy-session`, and `authorization` wherever a token is sent. Without them the rule about
+    // what a signature covers abstains here, and a control that abstains proves less than one
+    // that passes.
+    request(keys, { ...over, sid, sub, dlgCompact, path: "/poppy/orders", headers: SIGNED }),
+    request(keys, { ...over, sid, sub, dlgCompact, path: "/poppy/orders/1", headers: SIGNED }),
     // 8.3: "Every `POST` body has an `id`, chosen by the Personal Agent". A conforming agent
     // sends one, and the record carries which conversation route it is, so the rule about
     // request IDs has something to pass on.
@@ -160,8 +172,9 @@ export async function conformingLog(keys, over = {}) {
                                                       context: { locale: "en-US",
                                                                  time_zone: "America/Los_Angeles",
                                                                  user_available: true } } }),
+                    headers: SIGNED,
                     conversationRoute: "start" }),
-    request(keys, { ...over, sid, sub, dlgCompact, path: "/poppy/orders/2",
+    request(keys, { ...over, sid, sub, dlgCompact, path: "/poppy/orders/2", headers: SIGNED_WITH_TOKEN,
                     token, ath: createHash("sha256").update(token).digest("base64url") }),
   ]);
 }

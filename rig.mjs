@@ -56,6 +56,8 @@ export const CANARY_ABSTAINS = {
   "delegation.signature": "grader",
 };
 export const CANARY_EXCLUDED = {
+  "session.operator-signature-covers": "the canary signs Session JWTs with the authors own code and does no Web Bot Auth signing, so its requests carry no operator signature. The rule is judged for a builder whose agent sends one.",
+
   "conversation.context-fields": "the canary's conversation POST shares no locale, time zone or availability, because none of them is needed to exercise a Session, so 8.4's formats do not apply to its traffic. The rule is judged for a builder whose agent shares one of those facts.",
 
   "signin.not-when-disabled": "the canary never sends a token request, because this Company issues no tokens and 3.2 forbids an agent to start a sign-in here at all. The rule is judged only for a builder whose agent sends a grant to the token endpoint.",

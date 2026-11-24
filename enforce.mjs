@@ -64,6 +64,7 @@ export const ENFORCE_EXCLUDED = {
   // `invalid_session` and `version_unsupported` only, so refusing from here would answer the
   // wrong error for the breach; the conversation handler already answers it where the
   // specification does.
+  "session.operator-signature-covers": "the signature is the operator identifying itself to bot defences, not the Session this path verifies, and 5.3 gives no error for a signature that covers too little. Refusing on it would invent an answer the specification does not name.",
   "conversation.context-fields": "8.13 puts a malformed field under `invalid_request`, and this path answers `invalid_session` or `version_unsupported` only, so enforcing it here would name the wrong error. This Company serves a context it cannot read rather than refusing one, because 8.4 gives these facts to the Company Agent and a Company that rejected a bad locale would be stricter than the text.",
   "delegation.key-per-user": "it needs more than one request to decide: one delegated key serving two Users is only visible across the Sessions of a run, and enforcement grades the single request in front of it, where one key and one User look exactly right.",
   "signin.not-when-disabled": "this Company already answers `unsupported_grant_type` for a grant it does not list, which RFC 6749 and its own metadata require of it, and this path answers `invalid_session` or `version_unsupported` only. Enforcing it here would name the wrong error for a request the token endpoint has already turned down.",
