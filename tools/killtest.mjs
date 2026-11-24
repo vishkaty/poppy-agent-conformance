@@ -505,7 +505,8 @@ export const MUTATIONS = [
     to: "        if (false) { unreadable.push(r); continue; }" },
   { id: "checks/request-id-global-uniqueness", file: "checks.mjs", tests: "tests/checks.test.mjs",
     kills: "unique for the User, not across Users",
-    find: "        const key = `${user}\\u0000${id}`;", to: "        const key = `${id}`;" },
+    find: "        const key = `${issOf.get(r) ?? \"\"}\\u0000${user}\\u0000${id}`;",
+    to: "        const key = `${issOf.get(r) ?? \"\"}\\u0000${id}`;" },
   { id: "checks/request-id-raw-bytes", file: "checks.mjs", tests: "tests/checks.test.mjs",
     kills: "still a retry when its body is serialised differently",
     find: "        const shape = `${r.path}\\u0000${canonicalJson(parsed)}`;",
@@ -594,6 +595,33 @@ export const MUTATIONS = [
     kills: "no rule faults a shop's own traffic, because no sentence of 1.0 binds it",
     find: "      const mine = (r) => r.isResource || r.mustNotCarry",
     to: "      const mine = (r) => r.isResource || r.isPage || r.mustNotCarry" },
+
+  // Keying by the agent. A Session belongs to one User at one Company through one Personal
+  // Agent (5.1), so every map on a value the agent picks for itself carries its client_id.
+  // Drop it and two agents that both number from one collide; the worst of these told one
+  // agent that another agent's signature was a replay of its own.
+  { id: "agents/sub-stable-pools-agents", file: "checks.mjs", tests: "tests/two-agents.test.mjs",
+    kills: "no rule faults one agent for a value another agent chose",
+    find: "        const e = bySid.get(k) ?? bySid.set(k, { sid, values: new Set(), requests: [] }).get(k);",
+    to: "        const e = bySid.get(sid) ?? bySid.set(sid, { sid, values: new Set(), requests: [] }).get(sid);" },
+  { id: "agents/version-constant-pools-agents", file: "checks.mjs", tests: "tests/two-agents.test.mjs",
+    kills: "no rule faults one agent for a value another agent chose",
+    find: "        const e = bySid.get(k) ?? bySid.set(k, { sid, versions: new Map() }).get(k);",
+    to: "        const e = bySid.get(sid) ?? bySid.set(sid, { sid, versions: new Map() }).get(sid);" },
+  { id: "agents/jti-pools-agents", file: "checks.mjs", tests: "tests/two-agents.test.mjs",
+    kills: "no rule faults one agent for a value another agent chose",
+    find: "        const e = byJti.get(k) ?? byJti.set(k, { jti: j, shapes: new Set(), requests: [] }).get(k);",
+    to: "        const e = byJti.get(j) ?? byJti.set(j, { jti: j, shapes: new Set(), requests: [] }).get(j);" },
+  { id: "agents/request-id-pools-agents", file: "checks.mjs", tests: "tests/two-agents.test.mjs",
+    kills: "no rule faults one agent for a value another agent chose",
+    find: '${issOf.get(r) ?? ""}', to: '' },
+  { id: "agents/private-key-cites-every-request", file: "checks.mjs", tests: "tests/two-agents.test.mjs",
+    kills: "a FAIL names only the requests that decided it, not every agent in the log",
+    find: "[...new Set(bad)], hits)", to: "[...new Set(bad)], pairs.map(x => x.r))" },
+  { id: "agents/alg-cites-every-request", file: "checks.mjs", tests: "tests/two-agents.test.mjs",
+    kills: "a FAIL names only the requests that decided it, not every agent in the log",
+    find: "[...new Set(bad.map(({ d }) => String(d.header?.alg)))].slice(0, 3), bad.map(({ r }) => r))",
+    to: "[...new Set(bad.map(({ d }) => String(d.header?.alg)))].slice(0, 3), pairs.map(({ r }) => r))" },
 ];
 
 // Imported for its MUTATIONS list by a test that owns the count in the README. Everything

@@ -325,7 +325,8 @@ export const CHECKS = [
       const bySid = new Map();
       for (const { r, jwt } of s) {
         const sid = jwt.payload.sid;
-        const e = bySid.get(sid) ?? bySid.set(sid, { values: new Set(), requests: [] }).get(sid);
+        const k = agentKey(jwt, sid);
+        const e = bySid.get(k) ?? bySid.set(k, { sid, values: new Set(), requests: [] }).get(k);
         e.values.add(JSON.stringify([jwt.payload.sub, jwt.payload.agent_id ?? null]));
         e.requests.push(r);
       }
@@ -339,7 +340,7 @@ export const CHECKS = [
       // one of them fine, pointed the builder at both.
       return bad.length
         ? FAIL("sub or agent_id changed within one Session",
-               bad.map(([sid, v]) => `sid ${String(sid).slice(0, 12)}: ${v.values.size} different values`),
+               bad.map(([, v]) => `sid ${String(v.sid).slice(0, 12)}: ${v.values.size} different values`),
                bad.flatMap(([, v]) => v.requests))
         : PASS(`sub and agent_id were stable across ${bySid.size} Session(s)`);
     },
@@ -374,7 +375,8 @@ export const CHECKS = [
         if (j === undefined || j === "") continue;    // claims-present reports those
         if (r.bodyComplete === false) { incomplete++; continue; }
         const shape = `${r.method} ${htuOf(r) ?? r.path} ${r.body ?? ""}`;
-        const e = byJti.get(j) ?? byJti.set(j, { shapes: new Set(), requests: [] }).get(j);
+        const k = agentKey(jwt, j);
+        const e = byJti.get(k) ?? byJti.set(k, { jti: j, shapes: new Set(), requests: [] }).get(k);
         e.shapes.add(shape); e.requests.push(r);
       }
       if (!byJti.size)
@@ -396,7 +398,7 @@ export const CHECKS = [
         : "";
       if (replayed.length) return FAIL(
         "one jti signed requests that differ, so a signature was replayed onto another request",
-        replayed.map(([j, v]) => `${String(j).slice(0, 16)} signed ${v.shapes.size} different requests`).slice(0, 3),
+        replayed.map(([, v]) => `${String(v.jti).slice(0, 16)} signed ${v.shapes.size} different requests`).slice(0, 3),
         replayed.flatMap(([, v]) => v.requests));
       return byJti.size < complete
         ? PASS(`no jti signed two different requests; ${complete - byJti.size} identical resend(s) seen, which 5.3 leaves to the Company to reject${note}`)
@@ -653,9 +655,10 @@ export const CHECKS = [
       for (const { r, jwt } of withHeader) {
         const sid = jwt.payload.sid;
         if (sid === undefined) continue;
-        const e = bySid.get(sid) ?? bySid.set(sid, new Map()).get(sid);
+        const k = agentKey(jwt, sid);
+        const e = bySid.get(k) ?? bySid.set(k, { sid, versions: new Map() }).get(k);
         const v = String(r.headers?.["poppy-version"] ?? null);
-        if (!e.has(v)) e.set(v, r);                  // first sighting of this value
+        if (!e.versions.has(v)) e.versions.set(v, r);  // first sighting of this value
       }
       if (!bySid.size) return SKIP("no request carried both a Session header and a sid");
       // Nothing could change inside a Session of one request, so a pass would be a claim
@@ -664,15 +667,17 @@ export const CHECKS = [
       const counts = new Map();
       for (const { r, jwt } of withHeader) {
         const sid = jwt.payload.sid;
-        if (sid !== undefined) counts.set(sid, (counts.get(sid) ?? 0) + 1);
+        if (sid === undefined) continue;
+        const k = agentKey(jwt, sid);
+        counts.set(k, (counts.get(k) ?? 0) + 1);
       }
-      const mixed = [...bySid].filter(([, v]) => v.size > 1);
+      const mixed = [...bySid].filter(([, v]) => v.versions.size > 1);
       if (!mixed.length && ![...counts.values()].some(n => n > 1))
         return SKIP("no Session carried two requests, so nothing could change within one");
       return mixed.length
         ? FAIL("Poppy-Version changed within one Session",
-               mixed.map(([sid, v]) => `sid ${String(sid).slice(0, 12)}: ${[...v.keys()].join(", ")}`).slice(0, 3),
-               mixed.flatMap(([, v]) => [...v.values()]))
+               mixed.map(([, v]) => `sid ${String(v.sid).slice(0, 12)}: ${[...v.versions.keys()].join(", ")}`).slice(0, 3),
+               mixed.flatMap(([, v]) => [...v.versions.values()]))
         : PASS(`every Session declared one Poppy-Version across ${bySid.size} Session(s)`);
     },
   },
@@ -715,18 +720,25 @@ export const CHECKS = [
     section: "5.2",
     quote: "It MUST NOT contain private key members.",
     run(log) {
-      const dlgs = sessionRequests(log).map(x => decodeJwt(x.jwt.header.poppy_dlg)).filter(Boolean);
-      if (!dlgs.length) return SKIP("no delegation was sent");
+      // The request is carried BESIDE its delegation, the way delegation.exp-24h already does.
+      // Mapping the delegations out on their own lost the pairing, so one bad delegation cited
+      // every Session request in the log as having decided the verdict, which in a recording
+      // with several agents means a builder sees their own conforming requests listed under
+      // somebody else's breach.
+      const pairs = sessionRequests(log)
+        .map(x => ({ r: x.r, d: decodeJwt(x.jwt.header.poppy_dlg) }))
+        .filter(x => x.d);
+      if (!pairs.length) return SKIP("no delegation was sent");
       const PRIVATE = ["d", "p", "q", "dp", "dq", "qi", "k"];
       const bad = []; const hits = [];
-      for (const d of dlgs) {
+      for (const { r, d } of pairs) {
         const jwk = d.payload?.cnf?.jwk;
         if (!jwk) continue;
         const found = PRIVATE.filter(m => jwk[m] !== undefined);
-        if (found.length) bad.push(`cnf.jwk carries ${found.join(", ")}`);
+        if (found.length) { bad.push(`cnf.jwk carries ${found.join(", ")}`); hits.push(r); }
       }
-      return bad.length ? FAIL("a delegation exposed private key material", [...new Set(bad)], sessionRequests(log).map(x => x.r))
-                        : PASS(`no delegation carried a private key member across ${dlgs.length} delegation(s)`);
+      return bad.length ? FAIL("a delegation exposed private key material", [...new Set(bad)], hits)
+                        : PASS(`no delegation carried a private key member across ${pairs.length} delegation(s)`);
     },
   },
   {
@@ -834,14 +846,21 @@ export const CHECKS = [
     // blindly (10.7), so failing it would fail a conforming agent that protects its users
     // from its own operator.
     run(log) {
-      const dlgs = sessionRequests(log).map(x => decodeJwt(x.jwt.header.poppy_dlg)).filter(Boolean);
-      if (!dlgs.length) return SKIP("no delegation was sent");
+      // The request is carried BESIDE its delegation, the way delegation.exp-24h already does.
+      // Mapping the delegations out on their own lost the pairing, so one bad delegation cited
+      // every Session request in the log as having decided the verdict, which in a recording
+      // with several agents means a builder sees their own conforming requests listed under
+      // somebody else's breach.
+      const pairs = sessionRequests(log)
+        .map(x => ({ r: x.r, d: decodeJwt(x.jwt.header.poppy_dlg) }))
+        .filter(x => x.d);
+      if (!pairs.length) return SKIP("no delegation was sent");
       const allowed = new Set(["ES256", "PS384"]);
-      const bad = dlgs.filter(d => !allowed.has(d.header?.alg));
+      const bad = pairs.filter(({ d }) => !allowed.has(d.header?.alg));
       return bad.length
         ? FAIL("a delegation was signed with an algorithm 1.0 does not define for one",
-               [...new Set(bad.map(d => String(d.header?.alg)))].slice(0, 3), sessionRequests(log).map(x => x.r))
-        : PASS(`every delegation used ES256 or PS384 across ${dlgs.length} delegation(s)`);
+               [...new Set(bad.map(({ d }) => String(d.header?.alg)))].slice(0, 3), bad.map(({ r }) => r))
+        : PASS(`every delegation used ES256 or PS384 across ${pairs.length} delegation(s)`);
     },
   },
   {
@@ -874,6 +893,9 @@ export const CHECKS = [
       if (!posts.length) return SKIP("the agent made no POST to a conversation route (8.2)");
       // 8.3 makes the id unique "for the User", so the comparison is per User and not global.
       const userOf = new Map(sessionRequests(log).map(({ r, jwt }) => [r, jwt.payload?.sub ?? null]));
+      // 8.3 scopes the id to "all its requests", the agent's own, so one person using two agents
+      // is two namespaces: each numbering its own requests from r1 is not one User reusing an id.
+      const issOf = new Map(sessionRequests(log).map(({ r, jwt }) => [r, jwt.payload?.iss ?? ""]));
       const noId = [], seenByUser = new Map(), clashing = [], unreadable = [];
       for (const r of posts) {
         // Our cap and a dropped socket are ours, not a breach. The jti rule skips the same way.
@@ -888,7 +910,7 @@ export const CHECKS = [
         // session.header-sent is the rule that reports it.
         const user = userOf.get(r);
         if (user === null || user === undefined) continue;
-        const key = `${user}\u0000${id}`;
+        const key = `${issOf.get(r) ?? ""}\u0000${user}\u0000${id}`;
         // "To retry a request, the Personal Agent sends it again to the same path with the same
         // ID", and 8.3 says nothing about member order, so the same request is recognised on a
         // canonical form rather than on raw bytes.
@@ -1431,6 +1453,16 @@ function firstFetchReason(s) {
 // our cap or a dropped socket and never a breach, and a target we refused to classify says in its
 // own record that no rule examined it. A route that carries no message, such as close or cancel,
 // is not a message with something missing.
+// A Session "belongs to one User, at one Company, through one Personal Agent" (5.1), and "an
+// agent another company runs connects under its own `client_id`" (5.1). So every map that keys
+// on a value the AGENT picks for itself, a sid, a jti, a conversation request id, must carry the
+// client_id beside it. Without that, two agents in one recording that both number from one
+// collide and the rule faults whichever it met second: session.jti-unique reported that one key
+// "signed 2 different requests", which across two signers is an accusation of signature replay
+// against an agent that did nothing. The hosted rig never saw this because a lease grades one
+// agent at a time; a recorder in front of a real store has no lease.
+const agentKey = (jwt, ...parts) => [jwt?.payload?.iss ?? "", ...parts].join("\u0000");
+
 function agentMessages(log) {
   const posts = log.filter(r => r.method === "POST" && r.conversationRoute
                                 && !r.unsafeTarget && !r.refused);

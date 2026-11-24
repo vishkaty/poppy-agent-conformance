@@ -47,7 +47,7 @@ export function issuerKeysFor(keys, over = {}) {
   // header. A real agent chooses its own kid and publishes the key under it; 5.2 says `kid`
   // "names the key in `jwks_uri`", so these two have to agree or the fixture models an agent
   // whose key set does not match its own delegations.
-  return { outcome: "ok", iss: CLIENT_ID, jwksUri: "https://agent.example/jwks.json",
+  return { outcome: "ok", iss: over.clientId ?? CLIENT_ID, jwksUri: "https://agent.example/jwks.json",
            keys: [{ ...keys.operatorJwk, kid: "k1" }], kids: ["k1"],
            source: "fetch", fetchedAt: Math.floor(Date.now() / 1000), ageSeconds: 0 };
 }
@@ -55,7 +55,7 @@ export function issuerKeysFor(keys, over = {}) {
 export async function delegation(keys, over = {}) {
   const iat = over.iat ?? Math.floor(Date.now() / 1000);
   return new SignJWT({
-    iss: CLIENT_ID, iat, exp: over.exp ?? iat + 3600,
+    iss: over.clientId ?? CLIENT_ID, iat, exp: over.exp ?? iat + 3600,
     jti: randomUUID(), cnf: { jwk: keys.jwk }, ...over.payload,
   })
     .setProtectedHeader({ alg: "ES256", typ: over.typ ?? "poppy-delegation+jwt", kid: "k1" })
@@ -67,9 +67,14 @@ export async function request(keys, over = {}) {
   const method = over.method ?? "GET";
   const path = over.path ?? "/poppy/orders";
   const at = over.at ?? Math.floor(Date.now() / 1000);
-  const dlg = over.dlgCompact ?? await delegation(keys, over.dlg ?? {});
+  // A second agent needs ONE option, not three. Its client_id has to agree across the Session
+  // JWT, the delegation it carries and the key set the recorder resolved for it, or the fixture
+  // models an agent whose delegation belongs to somebody else and delegation.iss-matches fires
+  // for a reason the test did not intend.
+  const clientId = over.clientId ?? CLIENT_ID;
+  const dlg = over.dlgCompact ?? await delegation(keys, { clientId, ...(over.dlg ?? {}) });
   const claims = {
-    iss: CLIENT_ID, aud: over.aud ?? IDENTIFIER,
+    iss: clientId, aud: over.aud ?? IDENTIFIER,
     sid: over.sid ?? "sid-" + randomUUID(), sub: over.sub ?? "user-" + randomUUID(),
     htm: over.htm ?? method, htu: over.htu ?? ORIGIN + path,
     iat: over.iat ?? at, jti: over.jti ?? randomUUID(),
@@ -123,7 +128,7 @@ export async function request(keys, over = {}) {
     ...(over.response !== undefined ? { response: over.response } : {}),
     ...(over.isResource !== undefined ? { isResource: over.isResource } : {}),
     ...(over.isAuthServer !== undefined ? { isAuthServer: over.isAuthServer } : {}),
-    issuerKeys: issuerKeysFor(keys, over),
+    issuerKeys: issuerKeysFor(keys, { clientId, ...over }),
   };
 }
 
