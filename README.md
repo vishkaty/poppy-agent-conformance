@@ -25,13 +25,26 @@ It does not detect a User ID derived from personal information. Spec 5.1 forbids
 one even with a keyed hash, and the guides allow an HMAC of an internal id with the Company
 identifier. A Company cannot tell those apart on the wire, so no check here claims to.
 
-It checks that a conversation POST carries a request id, that one User does not use the same id
-for two different requests, and that the id is 1 to 256 characters from the URL safe base64
-alphabet, which is what 8.3 and 8.2 require of an agent. The alphabet rule applies the same
-pattern this Company's own conversation handler applies, and a test holds the two together, so a
-report cannot show a request this Company refused beside a rule that found nothing wrong with it.
-What is still unchecked is anything beyond length and alphabet, deliberately: 8.2 says the side
-that chooses an ID decides its format and the other side MUST NOT depend on it.
+It does not look at most of what 1.0 asks of an agent, and that is the honest headline of this
+section. The twenty nine rules are concentrated almost entirely on one layer: the Session header
+of 5.2 and the delegation that vouches for it, which is the layer a Company depends on to know who
+is calling. On that layer the coverage is close to exhaustive. Outside it, the gaps are large and
+specific. Nothing here checks what an agent puts in a conversation message, so 8.4 and 8.8, which
+include the one place the protocol makes an agent say whether a person or an AI is speaking, go
+unexamined. Nothing checks the recovery the specification prescribes after an error, so an agent
+that retries a request section 7 tells it to stop sending is not faulted. Nothing reads
+`Poppy-Extensions` or an operator signature. And nothing in sections 4, 6 or 9, nor in any
+extension, can be reached at all by a Company that sets `auth.disabled`, serves no website and
+answers its tasks endpoint with `{ok: true}`, which is what this one does. A reader should take
+the rule list as the claim and this paragraph as its boundary, rather than reading twenty nine
+rules as twenty nine out of thirty.
+
+What it does check about conversation ids is the request id of 8.3, that one User does not use the
+same id for two different requests, and the 1 to 256 character URL safe base64 alphabet of 8.2.
+The alphabet rule applies the same pattern this Company's own conversation handler applies, and a
+test holds the two together, so a report cannot show a request this Company refused beside a rule
+that found nothing wrong with it. Nothing beyond length and alphabet is checked, deliberately: 8.2
+says the side that chooses an ID decides its format and the other side MUST NOT depend on it.
 
 It does not verify a delegation against the key published at the agent `jwks_uri` UNLESS the
 deployment asks for it. That was the largest gap here and it is closed: with
@@ -123,7 +136,7 @@ bound it:
   request without verifying the header or requiring one", and 5.2 says documents and OAuth
   endpoints do not carry the header at all. A document, a website page or anything that is not
   a Session destination is answered as before.
-- **Nothing conforming is refused, asserted three ways.** Every request of the conforming
+- **Nothing conforming is refused by a rule, asserted three ways.** Every request of the conforming
   fixture, every request minted by the authors own signing code, and every case in
   `false-fails.test.mjs`, which is the traffic this project once wrongly failed.
 - **The deployment proves it before grading anyone.** The canary already drives this Company
@@ -146,9 +159,10 @@ failure here can be one.
 Eight rules are reported and never refused, each with its reason in `enforce.mjs`: the three
 that need more than one request to decide, the one about documents, the two privacy rules,
 which are the most contestable accusations this grader makes and so are never used to close a
-door, and the request id rule of 8.3, whose answer 8.13 puts under `invalid_request` while this
-path speaks `invalid_session` only, so the conversation handler answers it instead. The count
-was wrong here for two days in a row, which is why a test now derives it.
+door, and the two conversation id rules, the request id of 8.3 and the id alphabet of 8.2, whose
+answers 8.13 puts under `invalid_request` while this path speaks `invalid_session` only, so the
+conversation handler answers them instead. The count was wrong here twice and the list beside it
+once, which is why a test derives the count and the paragraph names every rule it covers.
 
 ## Enough of section 8 that an agent can finish a conversation
 
@@ -158,7 +172,7 @@ the other five routes of 8.2 at all: the only agent that ever reached routes two
 was the authors own validator, by inventing ids. So the threshold for being a useful target is
 exact, and it is now met: return a Conversation ID and remember it.
 
-`POST {endpoint}` answers 201 with a `conversation_id`, the other routes answer 202, and
+`POST {endpoint}` answers 201 with a `conversation_id`, the other POST routes answer 202, and
 `GET {endpoint}/{id}/events` answers with the fields 8.5 names and the state 8.7 defines. A
 conversation belongs to the Personal Agent's `client_id` and the User ID that started it, so
 another User of the same agent and another agent entirely both get the same 404
@@ -225,7 +239,16 @@ Whose fault an outcome is comes down to bytes. If a response arrived, it is abou
 because a status code is its own server speaking, and only 404 and 410 are failures: a 401, 403
 or 429 is something a builder can change, and a bot rule in front of a metadata host must never
 close a door. If no response arrived, it is ours, and the rule abstains with cause grader and
-never fails the builder. A failed fetch is not retried on every request, and a lease has a
+never fails the builder.
+
+One consequence of that lands on the wire rather than in the report, and it is the one place where
+a status code here is not a verdict of `grade`. A conversation request whose delegation this grader
+could not verify, for any reason including its own, is still answered 400 `invalid_session` with
+the reason in `error_description`, because 5.3 forbids holding conversation state under claims
+nobody checked. Other destinations answer as usual, and the report records such a fetch failure as
+this grader failing to judge rather than as anything about the agent. So a conforming agent whose
+key set is briefly unreachable from here is refused on that one route while being failed by no
+rule. A failed fetch is not retried on every request, and a lease has a
 budget of distinct issuers, because whoever holds it can name a new one on every request.
 
 **What turning it on costs.** This process stops being one that only ever answered. Whoever
@@ -519,7 +542,7 @@ and so report five MUST failures at the token endpoint. We follow the sentence. 
 the whole of it. The same answer also costs `assertion.jti-reuse`, which is a SHOULD and so
 reports as the one warning, and nothing outside the token endpoint fails: in the run of
 2026-11-20 their report was ninety three passed, five failed, one warning and thirty four
-skipped, and all six of the failures and the warning are `assertion.` checks.
+skipped, and the five failures and the warning are all `assertion.` checks.
 
 ## Record it yourself, so nothing has to reach us
 
@@ -633,7 +656,7 @@ than a citation.
 
 Early, and honest about what has been measured.
 
-Twenty nine rules, and 120 mutations that each break one guard and require a named test
+Twenty nine rules, and 121 mutations that each break one guard and require a named test
 to notice. The test count is deliberately not quoted here: it went stale twice in one day, and
 `npm test` prints it. It has been run against synthetic traffic, against traffic minted by the
 authors own signing code, and end to end through a tunnel at a real hostname on 443. That last
@@ -645,11 +668,12 @@ nine rules. The one it cannot exercise is `session.ath`: this grader issues no a
 so a conforming agent sends no `ath` here, and the rule is judged only for a builder who points
 a signed-in code path at it with a token of their own.
 
-It has been run against two agents nobody here wrote. The first is the authors own kit
-validator, acting as a Personal Agent: every breach it deliberately sent was caught. The second
-is a Personal Agent SDK nobody here wrote. Driven through a signed-out task at the live
-deployment on 2026-11-23, across both Companies, and signing with a published test identity so
-that the key set behind its delegation could really be fetched: of the 29 rules, **28 passed,
+It has been run against agents nobody here wrote: the authors own kit validator, acting as a
+Personal Agent, which had every breach it deliberately sent caught, and three Personal Agent
+codebases, two of which share a lineage, across six runs. The most recent of those runs is the
+one below. Driven through a signed-out task at the live deployment on
+2026-11-23, across both Companies, and signing with a published test identity so that the key set
+behind its delegation could really be fetched: of the 29 rules, **28 passed,
 none failed, one was not reached, and none was left unjudged by this grader**. The one not reached
 is `session.ath`, and no conforming agent can reach it here, because this Company issues no access
 tokens. An agent that sent a stray Authorization header would reach it, which is the only way to.
@@ -667,7 +691,8 @@ evidence about this instrument rather than about software anyone else wrote, and
 subject is still something its author could recognise. So the rule this project actually keeps is
 narrower than "no verdict is published": nothing identifies a subject, nothing of theirs is
 quotable from here, and anything beyond a count stays with the builder.
-The run is reproducible by anyone who points any agent at a leased run of this grader.
+Anyone can repeat the procedure by pointing an agent at a leased run of this grader. The figure
+above belongs to one agent and is not a general result.
 
 What this grader does NOT do, stated plainly because the absence is the thing that misleads: it
 cannot tell a hashed User ID from a random one, 5.1 forbids deriving one even with a keyed hash,

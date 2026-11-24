@@ -83,7 +83,12 @@ function documents(cfg) {
   // rather than 8.2, so the profile is not an 8.2 route base.
   for (const p of d.agent?.protocols ?? []) if (p?.type && p.type !== "poppy" && p.endpoint) out.push(p.endpoint);
   for (const e of cfg.authServerEndpoints ?? []) out.push(e);
-  if (d.web?.browser_session_endpoint) out.push(d.web.browser_session_endpoint);
+  // The browser session page is NOT here, though it was. 5.2 names what must not carry the
+  // header, "Discovery and description documents and OAuth endpoints", and that page is neither:
+  // it sits on the Company's own domain, where the same section says an agent fetching a page
+  // with its own HTTP client SHOULD send the header. Listing it made a rule nobody wrote, which
+  // only ever slept because this deployment serves no `web` block by default. Its `/authorize`
+  // route IS a destination, which section 6 does say, and classify handles that separately.
   return out;
 }
 

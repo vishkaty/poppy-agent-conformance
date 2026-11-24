@@ -253,6 +253,10 @@ export const CHECKS = [
     quote: "`iat` is when the Personal Agent signed it, in Unix seconds",
     // 5.3 leaves the window to the Company, "such as one minute", so a FAIL here names our
     // window rather than implying the spec fixed one.
+    // The sentence quoted states no window: it says what `iat` IS. The window is this Company's
+    // to choose, and 5.3 says so in those words, "an acceptance window it chooses, such as one
+    // minute". So a FAIL here is this Company's threshold applied to the agent's clock, which is
+    // why the verdict prints both clocks and the threshold instead of only a verdict.
     run(log) {
       const s = sessionRequests(log);
       if (!s.length) return SKIP("no Session header was sent");
@@ -936,7 +940,10 @@ export const CHECKS = [
       for (const r of posts) {
         let parsed = null;
         try { parsed = JSON.parse(r.body ?? ""); } catch { parsed = null; }
-        if (parsed && Object.hasOwn(parsed, "id")) ids.push({ r, id: parsed.id });
+        // A usable string only. An id that is absent, empty, or not a string at all is one
+        // mistake and `conversation.request-id` owns it; judging it here too failed the same
+        // body under two sentences and reported one builder error as two defects.
+        if (typeof parsed?.id === "string" && parsed.id !== "") ids.push({ r, id: parsed.id });
       }
       if (!ids.length) return SKIP("no POST to a conversation route carried a request id this grader could read");
       // The same alphabet and bound this Company's own conversation handler applies, so a status

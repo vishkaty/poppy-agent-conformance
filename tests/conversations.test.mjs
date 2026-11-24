@@ -403,7 +403,7 @@ test("the same Company serves conversations once verification has run", async ()
 });
 
 test("inside a run, the refusal says why verification failed and does not tell the builder to lease one", async () => {
-  // Found by the first run against a third-party agent SDK, which held a lease and was told
+  // Found by the first run against a agent nobody here wrote, which held a lease and was told
   // "lease a run first with POST /grader/runs" because its client_id host does not resolve.
   // One sentence covered four situations: no lease, a Session JWT with no `iss`, a fetch that
   // got no bytes, and a fetch whose answer was the agent's own defect. In three of them the

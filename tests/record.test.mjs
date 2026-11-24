@@ -261,3 +261,24 @@ test("a listed API path reached with a method the document does not describe is 
   assert.equal(got.mustNotCarry, false);
   assert.match(got.why, /method/i, `the record must say what is actually going on: ${got.why}`);
 });
+
+test("the browser session page is not a document 5.2 forbids a Session on", async () => {
+  // A dormant rule nobody wrote, found by walking the specification against the code. 5.2 names
+  // what must not carry the header: "Discovery and description documents and OAuth endpoints".
+  // The browser session page is neither. It sits on the Company's own domain, where 5.2 instead
+  // says a Personal Agent that fetches a page with its own HTTP client SHOULD send the header, so
+  // listing it here would have failed an agent for doing what the same section recommends. It was
+  // harmless only because this deployment serves no `web` block by default, which is the worst
+  // kind of harmless: a FAIL waiting for a configuration flag.
+  const { classify } = await import("../record.mjs");
+  const d = JSON.parse(JSON.stringify(DISCOVERY));
+  d.web = { browser_session_endpoint: "https://shop.example/poppy/browser" };
+  const cfg = { origin: "https://shop.example", discovery: d, apiOperations: [] };
+  const page = classify("https://shop.example/poppy/browser", "GET", cfg);
+  assert.equal(page.mustNotCarry, false,
+    `a Session header on the browser session page would be failed: ${page.why}`);
+  // The authorization POST under it IS a destination, which section 6 does say.
+  const authorize = classify("https://shop.example/poppy/browser/authorize", "POST", cfg);
+  assert.equal(authorize.isResource, true, "section 6's browser authorization is a destination");
+  assert.equal(authorize.mustNotCarry, false);
+});

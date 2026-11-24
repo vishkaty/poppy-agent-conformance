@@ -328,7 +328,7 @@ export const MUTATIONS = [
   { id: "record/prefix-collision-allowed", file: "server.mjs", kills: "under the control-plane prefix is refused",
     find: "if (prefix && x.origin === parsed.origin && x.pathname.startsWith(prefix))", to: "if (false)" },
   // The refusal a builder reads when a delegation could not be verified. Found by the first run
-  // against a third-party agent SDK, which held a lease and was told to go and get one.
+  // against a agent nobody here wrote, which held a lease and was told to go and get one.
   // 8.3's request ids, added after a conversation POST with none passed every rule here.
   { id: "checks/no-request-id-check", file: "checks.mjs", tests: "tests/checks.test.mjs",
     kills: "a conversation POST with no request id fails",
@@ -351,9 +351,14 @@ export const MUTATIONS = [
     kills: "outside the alphabet 8.2 allows is caught",
     find: "      const allowed = /^[A-Za-z0-9_-]{1,256}$/;", to: "      const allowed = /^[A-Za-z0-9_-]{1,255}$/;" },
   { id: "checks/id-format-faults-missing", file: "checks.mjs", tests: "tests/checks.test.mjs",
-    kills: "outside the alphabet 8.2 allows is caught",
-    find: "        if (parsed && Object.hasOwn(parsed, \"id\")) ids.push({ r, id: parsed.id });",
+    kills: "one mistake in a request id is one FAIL, not two",
+    find: "        if (typeof parsed?.id === \"string\" && parsed.id !== \"\") ids.push({ r, id: parsed.id });",
     to: "        if (parsed) ids.push({ r, id: parsed.id });" },
+  // A rule nobody wrote, dormant because this deployment serves no `web` block by default.
+  { id: "checks/browser-page-must-not-carry", file: "record.mjs", tests: "tests/record.test.mjs",
+    kills: "not a document 5.2 forbids a Session on",
+    find: "  for (const e of cfg.authServerEndpoints ?? []) out.push(e);",
+    to: "  for (const e of cfg.authServerEndpoints ?? []) out.push(e);\n  if (d.web?.browser_session_endpoint) out.push(d.web.browser_session_endpoint);" },
   // Each of these made the 8.3 rule accuse a conforming agent, and none of them was caught by a
   // test until an adversarial review built the inputs.
   { id: "checks/request-id-any-post", file: "checks.mjs", tests: "tests/checks.test.mjs",

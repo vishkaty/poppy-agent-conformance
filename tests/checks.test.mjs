@@ -505,3 +505,26 @@ test("this Company never refuses a request id that its own rules accept", async 
     assert.ok(faulted, `this Company refuses the id ${JSON.stringify(id)} and no rule faults it`);
   }
 });
+
+test("one mistake in a request id is one FAIL, not two", async () => {
+  // `conversation.id-format` says in its own comment that a missing id is left to
+  // `conversation.request-id`, so one mistake is not counted twice. It was counted twice anyway:
+  // an id of 123, or "", is PRESENT, so the format rule judged it and failed it under 8.2 while
+  // the request id rule failed the same body under 8.3. A report showing two defects where a
+  // builder made one overstates the fault and makes the count of failures untrustworthy.
+  const keys = await f.agentKeys();
+  for (const bad of [123, "", null, { nested: true }]) {
+    const rec = await f.request(keys, { method: "POST", path: "/poppy/conversations",
+                                        conversationRoute: "start", sub: "user-one",
+                                        body: JSON.stringify({ id: bad, message: { text: "x" } }) });
+    const failed = grade([rec], f.ctx).filter(v => v.verdict === "FAIL" && v.id.startsWith("conversation."));
+    assert.deepEqual(failed.map(v => v.id), ["conversation.request-id"],
+      `id ${JSON.stringify(bad)} was faulted by ${failed.length} rules: ${failed.map(v => v.id).join(", ")}`);
+  }
+  // And a usable id with characters 8.2 forbids is the format rule's own business, alone.
+  const wrongAlphabet = await f.request(keys, { method: "POST", path: "/poppy/conversations",
+                                                conversationRoute: "start", sub: "user-one",
+                                                body: JSON.stringify({ id: "msg 1/2", message: { text: "x" } }) });
+  const failed = grade([wrongAlphabet], f.ctx).filter(v => v.verdict === "FAIL" && v.id.startsWith("conversation."));
+  assert.deepEqual(failed.map(v => v.id), ["conversation.id-format"]);
+});

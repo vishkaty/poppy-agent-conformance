@@ -90,7 +90,7 @@ export function validateConfig(cfg) {
 // cover four situations and told every one of them to lease a run. Three of those already had
 // one: a Session JWT with no `iss`, a fetch that got no bytes, and a fetch whose answer was the
 // agent's own defect. A builder given the wrong remedy leases again and meets the same refusal,
-// which is what the first run against a third-party agent SDK did. checks.mjs already holds the
+// which is what the first run against a agent nobody here wrote did. checks.mjs already holds the
 // rule this follows: an abstention is never just silence.
 function whyNotVerified(verifying, record) {
   if (!verifying)
