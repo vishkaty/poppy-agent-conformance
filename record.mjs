@@ -21,6 +21,7 @@
 // not collide proves the fixture's geometry and not the rule.
 
 import { createHash } from "node:crypto";
+import { gunzipSync, inflateSync, brotliDecompressSync } from "node:zlib";
 const u = s => { try { return new URL(s); } catch { return null; } };
 const norm = p => (p.replace(/\/+$/, "") || "/");
 export const pathOf = s => { const x = u(s); return x ? norm(x.pathname) : null; };
@@ -335,6 +336,17 @@ export function recordOf(req, cfg, { at, body = null, bodyComplete = true } = {}
 // everything else that passes through a listed API. One function, so a rule that starts reading a
 // body the capture drops cannot silently abstain forever: the test beside this asserts the policy
 // against the places the rules actually read.
+// The content encodings a body may arrive in, and nothing else: an unknown token is not guessed at.
+export function encodingOf(value) {
+  const v = String(value ?? "").trim().toLowerCase();
+  return (v === "gzip" || v === "x-gzip" || v === "deflate" || v === "br") ? (v === "x-gzip" ? "gzip" : v) : null;
+}
+function decodeBody(raw, encoding) {
+  if (encoding === "gzip") return gunzipSync(raw);
+  if (encoding === "deflate") return inflateSync(raw);
+  return brotliDecompressSync(raw);
+}
+
 export function bodyIsKept(record) {
   return !!record?.conversationRoute || record?.isAuthServer === true;
 }
@@ -355,7 +367,22 @@ export function readBody(req, record, maxBody, done) {
     // on the record so a reader of the log is never left wondering whether a body was empty or
     // simply not kept.
     record.bodyKept = bodyIsKept(record);
-    record.body = record.bodyKept ? Buffer.concat(chunks).toString("utf8") : "";
+    // A body sent with a content encoding was stored as utf8 of the compressed bytes, so every
+    // rule that parses one read nothing: a conforming agent that gzipped a conversation POST was
+    // faulted for sending no request id, and this Company answered it 400. The hash still covers
+    // the bytes that ARRIVED, which is what identifies the request on the wire; the text a rule
+    // reads is the decoded body. A body this grader cannot decode is declared rather than guessed.
+    const encoding = encodingOf(record.headers?.["content-encoding"]);
+    record.contentEncoding = encoding;
+    if (!record.bodyKept) { record.body = ""; done(); return; }
+    const raw = Buffer.concat(chunks);
+    if (!encoding) { record.body = raw.toString("utf8"); done(); return; }
+    // Only a body that arrived whole can be decoded: a stream cut at the cap is not valid input.
+    const decodable = !record.bodyTruncated;
+    let text = null;
+    if (decodable) { try { text = decodeBody(raw, encoding).toString("utf8"); } catch { text = null; } }
+    record.bodyDecoded = text !== null;
+    record.body = text ?? "";
     done();
   });
   // aborted, reset, or the socket closed before `end`: the record stays incomplete and says

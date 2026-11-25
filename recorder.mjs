@@ -22,7 +22,7 @@
 //     recorder is not the Company. Writing an upstream refusal into that field would make a
 //     report claim this grader did the refusing.
 import { createServer, request as upstreamRequest } from "node:http";
-import { appendFileSync, openSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, openSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { recordOf, readBody, isUnsafeTarget } from "./record.mjs";
 import { contextOf } from "./discovery.mjs";
 import { buildReport } from "./report.mjs";
@@ -209,6 +209,11 @@ export function createRecorder(cfg) {
 // JSON Lines, because a run is appended to while it happens and must survive the recorder being
 // killed. A JSON array would need rewriting on every record and would be truncated garbage if
 // the process died mid-run; a line is either complete or it is the last one and discarded.
+// Reopening a log APPENDS to it. It used to truncate, so restarting the recorder on the same path
+// erased everything recorded before: a crash on day nine of a two week recording destroyed nine
+// days. A file whose header names another Company is refused rather than appended to, because two
+// Companies in one file would make every verdict ambiguous, and the salt of the existing header is
+// kept so a source tag means the same thing on both sides of the restart.
 export function openRunFile(path, header) {
   // A random salt per log file, written into the header. The report tags a source address with a
   // hash of it; with no salt that tag was sha256 of the address, and eight hex characters invert
@@ -217,6 +222,21 @@ export function openRunFile(path, header) {
   // judgement, because a verdict and everything beside it must be a pure function of the log: the
   // same file judges to the same tags every time, and two files give different tags for one
   // address, so a reader cannot join an operator's runs either.
+  let existing = null;
+  if (existsSync(path)) {
+    const first = readFileSync(path, "utf8").split("\n", 1)[0];
+    try { existing = JSON.parse(first); } catch { existing = null; }
+    if (existing && existing.kind !== "poppy-recorded-run") existing = null;
+  }
+  if (existing) {
+    const was = existing.discovery ? contextOf(existing.discovery)?.identifier : null;
+    const now = header.discovery ? contextOf(header.discovery)?.identifier : null;
+    if (existing.origin !== header.origin || was !== now)
+      throw new Error(`${path} already holds a recording of ${existing.origin} (${was}); this one is of`
+        + ` ${header.origin} (${now}). Two Companies in one file would make every verdict ambiguous:`
+        + " record to another path.");
+    return { path };                       // append to what is there, salt and all
+  }
   const addressSalt = header.addressSalt ?? randomBytes(16).toString("hex");
   writeFileSync(path, JSON.stringify({ kind: "poppy-recorded-run", version: 1, addressSalt, ...header }) + "\n");
   return { path };
@@ -233,12 +253,15 @@ export function readRun(path) {
   if (header.kind !== "poppy-recorded-run")
     throw new Error(`${path} does not start with a recorded run header`);
   const records = [];
+  let unreadableLines = 0;
   for (const line of lines.slice(1)) {
-    // A truncated last line is the recorder having been killed mid write, which is expected and
-    // is not a reason to refuse the rest of the run.
-    try { records.push(JSON.parse(line)); } catch { break; }
+    // A truncated LAST line is the recorder having been killed mid write, which is expected. One
+    // in the MIDDLE is a partial write under a full disk, and stopping there silently dropped
+    // every record after it: the report then covered a prefix of the run and said nothing about
+    // it. Each unreadable line is skipped and counted instead.
+    try { records.push(JSON.parse(line)); } catch { unreadableLines++; }
   }
-  return { header, records };
+  return { header, records, unreadableLines };
 }
 
 // Group recordings into Companies and judge them.

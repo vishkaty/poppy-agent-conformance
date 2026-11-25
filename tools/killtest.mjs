@@ -733,6 +733,25 @@ export const MUTATIONS = [
     kills: "the source tag is salted from the log header, so it is unguessable and still deterministic",
     find: '  const salt = token || runs.map(r => r.header?.addressSalt).find(Boolean) || "";',
     to: '  const salt = token || "";' },
+
+  // What a recording has to survive over weeks: a restart, a partial write, a compressed body.
+  { id: "robust/reopen-truncates", file: "recorder.mjs", tests: "tests/robustness.test.mjs",
+    kills: "reopening a log appends to it, and keeps the salt, so a restart loses nothing",
+    find: "  if (existing) {", to: "  if (false) {" },
+  { id: "robust/reopen-mixes-companies", file: "recorder.mjs", tests: "tests/robustness.test.mjs",
+    kills: "reopening a log for a DIFFERENT Company refuses rather than mixing two runs",
+    find: "    if (existing.origin !== header.origin || was !== now)", to: "    if (false)" },
+  { id: "robust/corrupt-line-ends-the-run", file: "recorder.mjs", tests: "tests/robustness.test.mjs",
+    kills: "a corrupt line in the middle is skipped and counted, not a silent end of the run",
+    find: "    try { records.push(JSON.parse(line)); } catch { unreadableLines++; }",
+    to: "    try { records.push(JSON.parse(line)); } catch { break; }" },
+  { id: "robust/encoding-ignored", file: "record.mjs", tests: "tests/robustness.test.mjs",
+    kills: "a compressed conversation body is decoded, so a conforming agent is not faulted for 8.3",
+    find: '    const encoding = encodingOf(record.headers?.["content-encoding"]);',
+    to: "    const encoding = null;" },
+  { id: "robust/undecodable-body-guessed", file: "record.mjs", tests: "tests/robustness.test.mjs",
+    kills: "a body this grader cannot decode is declared, not guessed",
+    find: '    record.body = text ?? "";', to: '    record.body = text ?? raw.toString("utf8");' },
 ];
 
 // Imported for its MUTATIONS list by a test that owns the count in the README. Everything
