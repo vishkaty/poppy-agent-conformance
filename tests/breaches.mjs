@@ -82,6 +82,18 @@ export const BREACH = {
     body: "grant_type=authorization_code&code=abc&client_id=https%3A%2F%2Fagent.example%2Fagent.json" })],
   // A request refused with invalid_session and then sent again, to be refused by the same rule.
   // Section 7 tells an agent to stop until it fixes the cause, and says a new Session is not a fix.
+  // 3.4 after a version refusal: the agent "starts a new Session and sends the request again,
+  // once". The breach is carrying on inside the Session that was refused. Identity is the 8.3
+  // request id, because two bodyless GETs to one path cannot be told apart.
+  "version.new-session-after-unsupported": async () => {
+    const refusal = { rejection: { rule: "version.sent", error: "version_unsupported" },
+                      response: { status: 400, error: "version_unsupported" } };
+    const body = JSON.stringify({ id: "r1", message: { author: { type: "human" }, text: "hello" } });
+    const base = { method: "POST", path: "/poppy/conversations", conversationRoute: "start",
+                   headers: { "content-type": "application/json" }, body, sid: "s1", sub: "user-one" };
+    return [await f.request(keys, { ...base, version: "0.9", seq: 1, ...refusal }),
+            await f.request(keys, { ...base, version: "1.0", seq: 2 })];
+  },
   "session.stops-after-refusal": async () => {
     // 8.3: "To retry a request, the Personal Agent sends it again to the same path with the same
     // ID", so the breach is the same path and the same request id, refused twice over. A bodyless
@@ -214,6 +226,8 @@ export const BREACH = {
 // tolerated quietly. The test also asserts each listed rule really is unreached, so this list
 // cannot hide a rule that fails.
 export const CONFORMING_UNREACHED = {
+  "version.new-session-after-unsupported":
+    "this Company answers `version_unsupported` only to a version it does not serve, and the conforming log declares the version this Company serves, so nothing is refused for its version and there is no recovery to judge",
   "conversation.wait-seconds":
     "the conforming log reads no events, and 8.5's `wait` belongs to that route alone, so there is no parameter here for the rule to judge",
   "version.extensions-listed":
@@ -228,6 +242,8 @@ export const CONFORMING_UNREACHED = {
 // the conforming log above does send a refresh and reaches it. Two lists rather than one, because
 // a shared list would have to claim a rule is unreachable in traffic that reaches it.
 export const REFERENCE_UNREACHED = {
+  "version.new-session-after-unsupported":
+    "this Company answers `version_unsupported` only to a version it does not serve, and the conforming log declares the version this Company serves, so nothing is refused for its version and there is no recovery to judge",
   ...CONFORMING_UNREACHED,
   "session.not-in-a-url":
     "this control sends no query on any request, so 5.6 has nothing in a URL to judge here. The conforming log does carry one, which is why the rule is reached there",

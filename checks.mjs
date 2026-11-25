@@ -703,6 +703,49 @@ export const CHECKS = [
     },
   },
   {
+    id: "version.new-session-after-unsupported",
+    section: "3.4",
+    quote: "If it chooses another version, it starts a new Session and sends the request again, once.",
+    // The recovery 3.4 prescribes, which nothing checked. After this Company answers
+    // `version_unsupported` the agent "fetches `poppy.json` again, without using a cached copy,
+    // and chooses again"; if it picks another version it starts a NEW Session and resends once,
+    // otherwise it stops. Carrying on inside the refused Session is neither.
+    //
+    // This is the OPPOSITE of what section 7 says about `invalid_session`, where "A new Session
+    // doesn't fix it". The retry rule is scoped to `invalid_session` alone for that reason, so the
+    // two cannot collide, and a conforming agent recovering from a version refusal is not faulted
+    // by it.
+    //
+    // Identity is by path and request id, which is what 8.3 defines a retry as, and never by path
+    // alone: two bodyless GETs to one path are indistinguishable from each other, which is how an
+    // earlier retry rule accused a conforming agent of resending when it had not. A request that
+    // carries no id identifies nothing, so nothing counts as a resend of it. The issuer is part
+    // of the key as well, because 5.1 scopes a Session to one Personal Agent and another agent
+    // reusing the same id is not this one resending.
+    appliesTo: "every version",
+    run(log) {
+      const refused = log.filter(r => r.rejection?.error === "version_unsupported");
+      if (!refused.length)
+        return SKIP("this Company refused nothing for its protocol version, so there was no recovery to make");
+      const seenBy = (r) => {
+        const jwt = decodeJwt(r.headers?.["poppy-session"]);
+        const sid = jwt?.payload?.sid, iss = jwt?.payload?.iss;
+        return sid === undefined || iss === undefined ? null : `${iss}\u0000${sid}`;
+      };
+      const bad = [];
+      for (const r of refused) {
+        const key = retryIdOf(r), who = seenBy(r);
+        if (!key || !who) continue;
+        bad.push(...log.filter(x => x !== r && (x.seq ?? 0) > (r.seq ?? 0)
+                                 && retryIdOf(x) === key && seenBy(x) === who));
+      }
+      return bad.length
+        ? FAIL("a request refused with version_unsupported was sent again inside the same Session, where 3.4 has the agent start a new one",
+               bad.slice(0, 3).map(r => `${r.method} ${r.path} resent in the Session that was refused`), bad)
+        : PASS(`${refused.length} request(s) were refused for their version and none carrying a request id was resent inside the refused Session`);
+    },
+  },
+  {
     id: "session.signature",
     section: "5.2",
     quote: "Verify the Session JWT's signature with the key in the delegation's `cnf.jwk`, and check that its `kid` is that key's thumbprint.",
@@ -1088,18 +1131,12 @@ export const CHECKS = [
       if (!refused.length)
         return SKIP("this Company refused nothing under a rule, so the agent was never told to stop sending anything");
       // Identity by path and request id, which is what 8.3 defines a retry as.
-      const idOf = (r) => {
-        if (r.bodyComplete === false || r.bodyTruncated) return null;
-        let parsed = null;
-        try { parsed = JSON.parse(r.body ?? ""); } catch { return null; }
-        return typeof parsed?.id === "string" && parsed.id !== "" ? `${r.path}\u0000${parsed.id}` : null;
-      };
       const resent = [];
       for (const r of refused) {
-        const key = idOf(r);
+        const key = retryIdOf(r);
         if (!key) continue;                 // nothing identifies this request, so nothing is a retry of it
         const later = log.filter(x => x !== r && (x.seq ?? 0) > (r.seq ?? 0)
-                                      && idOf(x) === key
+                                      && retryIdOf(x) === key
                                       && x.rejection?.rule === r.rejection.rule);
         if (later.length) resent.push(...later);
       }
@@ -1482,6 +1519,22 @@ function firstFetchReason(s) {
 // "signed 2 different requests", which across two signers is an accusation of signature replay
 // against an agent that did nothing. The hosted rig never saw this because a lease grades one
 // agent at a time; a recorder in front of a real store has no lease.
+// 8.3's identity for a retry: "To retry a request, the Personal Agent sends it again to the same
+// path with the same ID." Path plus the top level request id, and never the path alone, because
+// two bodyless GETs to one path are indistinguishable from each other: that is how an earlier
+// retry rule accused a conforming agent of resending when it had not. A body this grader could
+// not read identifies nothing, so nothing counts as a retry of it.
+//
+// One implementation, used by the section 7 retry rule and by 3.4's recovery rule. It was copied
+// into the second of those, which left an existing mutation matching two places and claiming to
+// cover a guard it could no longer pin down.
+function retryIdOf(r) {
+  if (r.bodyComplete === false || r.bodyTruncated) return null;
+  let parsed = null;
+  try { parsed = JSON.parse(r.body ?? ""); } catch { return null; }
+  return typeof parsed?.id === "string" && parsed.id !== "" ? `${r.path}\u0000${parsed.id}` : null;
+}
+
 const agentKey = (jwt, ...parts) => [jwt?.payload?.iss ?? "", ...parts].join("\u0000");
 
 function agentMessages(log) {

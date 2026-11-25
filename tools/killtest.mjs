@@ -440,14 +440,14 @@ export const MUTATIONS = [
     find: "        if (later.length) resent.push(...later);", to: "" },
   { id: "checks/retry-counts-any-later-request", file: "checks.mjs", tests: "tests/checks.test.mjs",
     kills: "resends a request it was told to stop sending is faulted",
-    find: "                                      && idOf(x) === key\n                                      && x.rejection?.rule === r.rejection.rule);",
+    find: "                                      && retryIdOf(x) === key\n                                      && x.rejection?.rule === r.rejection.rule);",
     to: ");" },
   // The false positive this rule shipped with: identity by method, URL and body made every
   // bodyless GET to one path a retry of every other.
   { id: "checks/retry-identity-ignores-the-id", file: "checks.mjs", tests: "tests/checks.test.mjs",
     kills: "are not a retry of each other",
-    find: "        try { parsed = JSON.parse(r.body ?? \"\"); } catch { return null; }",
-    to: "        try { parsed = JSON.parse(r.body ?? \"\"); } catch { return `${r.method} ${r.path}`; }" },
+    find: "  try { parsed = JSON.parse(r.body ?? \"\"); } catch { return null; }",
+    to: "  try { parsed = JSON.parse(r.body ?? \"\"); } catch { return `${r.method} ${r.path}`; }" },
   { id: "checks/retry-counts-our-own-refusal", file: "checks.mjs", tests: "tests/checks.test.mjs",
     kills: "abstains unless this Company actually refused something under a rule",
     find: "      const refused = log.filter(r => r.rejection?.error === \"invalid_session\" && r.rejection?.rule);",
@@ -667,6 +667,16 @@ export const MUTATIONS = [
   { id: "versions/not-judged-unsaid", file: "report.mjs", tests: "tests/versions.test.mjs",
     kills: "the report counts what it did not judge, and names the versions this Company serves",
     find: "      + (summary.notJudgedForVersion", to: "      + (false && summary.notJudgedForVersion" },
+
+  // 3.4's recovery after version_unsupported: a new Session and one resend. The first mutation
+  // stops the rule faulting anything, the second makes it fault the recovery 3.4 prescribes.
+  { id: "versions/recovery-never-faults", file: "checks.mjs", tests: "tests/versions.test.mjs",
+    kills: "resending in the SAME Session after version_unsupported is faulted",
+    find: "        if (!key || !who) continue;", to: "        continue;" },
+  { id: "versions/recovery-ignores-session", file: "checks.mjs", tests: "tests/versions.test.mjs",
+    kills: "resending in a NEW Session after version_unsupported is exactly what 3.4 prescribes",
+    find: "                                 && retryIdOf(x) === key && seenBy(x) === who));",
+    to: "                                 && retryIdOf(x) === key));" },
 ];
 
 // Imported for its MUTATIONS list by a test that owns the count in the README. Everything

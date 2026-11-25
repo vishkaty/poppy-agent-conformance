@@ -60,6 +60,12 @@ export const ENFORCED = [
 ];
 
 export const ENFORCE_EXCLUDED = {
+  // 3.4's recovery is visible only across two requests: the one this Company refused for its
+  // version, and a later one carrying the same request id inside the same Session. Enforcement
+  // grades a single record, so it cannot see the pair, and refusing the second request on its own
+  // would answer for something the record in hand does not show.
+  "version.new-session-after-unsupported":
+    "the recovery 3.4 prescribes is a relation between two requests, and enforcement decides one record at a time",
   // 8.13 puts a missing request id under `invalid_request`. This enforcement path speaks
   // `invalid_session` and `version_unsupported` only, so refusing from here would answer the
   // wrong error for the breach; the conversation handler already answers it where the

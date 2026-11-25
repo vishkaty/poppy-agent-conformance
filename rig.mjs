@@ -58,6 +58,7 @@ export const CANARY_ABSTAINS = {
   "delegation.signature": "grader",
 };
 export const CANARY_EXCLUDED = {
+  "version.new-session-after-unsupported": "the canary declares the version this Company serves, so nothing it sends is refused for its version and there is no recovery to drive. The rule is judged for a builder whose agent met a version refusal.",
   "conversation.wait-seconds": "the canary reads no events, so 8.5's `wait` never appears in its traffic. The rule is judged for a builder whose agent reads them.",
   "session.not-in-a-url": "the canary sends no query at all, so there is nothing in a URL for 5.6 to be judged on. The rule is judged for a builder whose agent sends one.",
 

@@ -18,7 +18,7 @@ refusal, so a status code and a verdict cannot disagree.
 
 ## What it does
 
-Forty checks over a recorded request log. Thirty eight need one Company. Two need
+Forty one checks over a recorded request log. Thirty nine need one Company. Two need
 two Companies, because the rules they test are pairwise: a User ID must differ per Company
 (spec 5.1) and a delegated key must sign for one User ID only (spec 5.2), so no single
 Company can observe either.
@@ -35,7 +35,7 @@ one even with a keyed hash, and the guides allow an HMAC of an internal id with 
 identifier. A Company cannot tell those apart on the wire, so no check here claims to.
 
 It does not look at most of what 1.0 asks of an agent, and that is the honest headline of this
-section. The forty rules are concentrated almost entirely on one layer: the Session header
+section. The forty one rules are concentrated almost entirely on one layer: the Session header
 of 5.2 and the delegation that vouches for it, which is the layer a Company depends on to know who
 is calling. On that layer the coverage is close to exhaustive. Outside it, the gaps are large and
 specific. Two rules now read the message itself, so a message with none of the content fields 8.4
@@ -52,8 +52,8 @@ side: an agent that sends a sign-in grant to the token endpoint of a Company tha
 sign-in is faulted under 3.2. Beyond that, nothing in sections 4, 6 or 9, nor in any extension,
 can be reached by a Company that sets `auth.disabled`, serves no website and answers its tasks
 endpoint with `{ok: true}`, which is what this one does. A reader should take
-the rule list as the claim and this paragraph as its boundary, rather than reading forty
-rules as forty out of forty one.
+the rule list as the claim and this paragraph as its boundary, rather than reading forty one
+rules as forty one out of forty two.
 
 What it does check about conversation ids is the request id of 8.3, that one User does not use the
 same id for two different requests, and the 1 to 256 character URL safe base64 alphabet of 8.2.
@@ -172,7 +172,7 @@ Session. Telling an agent the wrong one sends it into a loop.
 instruction to `invalid_session`, and this Company ends no Session and holds no account, so no
 failure here can be one.
 
-Nineteen rules are reported and never refused, each with its reason in `enforce.mjs`: the three that
+Twenty rules are reported and never refused, each with its reason in `enforce.mjs`: the three that
 need more than one request to decide, the one about documents, the two privacy rules, which are
 the most contestable accusations this grader makes and so are never used to close a door, the
 request id of 8.3, the id alphabet of 8.2 and a message with no content under 8.4, whose answers
@@ -683,7 +683,7 @@ than a citation.
 
 Early, and honest about what has been measured.
 
-Forty rules, and 172 mutations that each break one guard and require a named test
+Forty rules, and 174 mutations that each break one guard and require a named test
 to notice. The test count is deliberately not quoted here: it went stale twice in one day, and
 `npm test` prints it. It has been run against synthetic traffic, against traffic minted by the
 authors own signing code, and end to end through a tunnel at a real hostname on 443. That last
@@ -691,7 +691,7 @@ one is not a past event. Every lease is preceded by a control in which this grad
 itself with the authors own signing code, including one leg through the public hostname, and
 refuses to grade at all unless every rule that control exercises passes. On a deployment that
 verifies delegations, which the live one does, the control covers thirty two of the
-forty rules. The eight it cannot exercise are rules its own traffic never reaches:
+forty one rules. The nine it cannot exercise are rules its own traffic never reaches:
 `session.ath`, because this grader issues no access tokens so there is no `ath` to send;
 `session.stops-after-refusal`, because the control is conforming traffic and this Company refuses
 none of it, so there is no refusal to stop sending after; `signin.not-when-disabled`, because the control sends no
@@ -699,7 +699,9 @@ token request at all, this Company issuing no tokens; `conversation.context-fiel
 locale, time zone or availability, none of which a Session needs; `session.operator-signature-covers`, because the canary signs
 Session JWTs and does no Web Bot Auth signing, so it sends no operator signature; `version.extensions-listed`, because this Company lists
 no extensions, so nothing conforming declares one; `conversation.wait-seconds`, because the
-canary reads no events; and `session.not-in-a-url`, because it sends no query at all. Each is
+canary reads no events; `session.not-in-a-url`, because it sends no query at all; and
+`version.new-session-after-unsupported`, because the canary declares the version this Company
+serves, so nothing it sends is refused for its version and there is no recovery to drive. Each is
 judged only for a builder whose own run reaches it.
 
 It has been run against agents nobody here wrote: the authors own kit validator, acting as a

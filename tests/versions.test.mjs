@@ -187,7 +187,11 @@ test("only the two rules about `Poppy-Version` itself may read a version this Co
   // 1.0 does not govern.
   const { CHECKS } = await import("../checks.mjs");
   const flagged = CHECKS.filter(c => c.appliesTo === "every version").map(c => c.id).sort();
-  assert.deepEqual(flagged, ["version.constant", "version.sent"]);
+  // The recovery rule is the third, and the same sentence warrants it: line 298 names
+  // `version_unsupported` itself among the things that keep their meaning in every version, and
+  // the refusal that starts that rule can only be seen on a request whose declared version this
+  // Company does not serve.
+  assert.deepEqual(flagged, ["version.constant", "version.new-session-after-unsupported", "version.sent"]);
 });
 
 test("the report counts what it did not judge, and names the versions this Company serves", async () => {
@@ -220,4 +224,55 @@ test("the report counts what it did not judge, and names the versions this Compa
     for (const c of rule.perCompany)
       for (const cited of c.decidedBy ?? [])
         assert.ok(!outOfScope.has(cited), `${rule.id} cited a request it must not have read`);
+});
+
+// ---- recovery after version_unsupported ----
+//
+// 3.4 line 286, after the Company refuses: "The Personal Agent then fetches `poppy.json` again,
+// without using a cached copy, and chooses again. If it chooses another version, it starts a new
+// Session and sends the request again, once. Otherwise it stops sending the request."
+//
+// This is the opposite of what section 7 says about invalid_session, where "A new Session doesn't
+// fix it". The existing retry rule is scoped to invalid_session alone, so the two do not collide,
+// and nothing checked this one.
+const REFUSED = { rejection: { rule: "version.sent", error: "version_unsupported" },
+                  response: { status: 400, error: "version_unsupported" } };
+
+const convo = (over) => ({
+  method: "POST", path: "/poppy/conversations", conversationRoute: "start",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({ id: "r1", message: { author: { type: "human" }, text: "hi" } }),
+  ...over });
+
+test("resending in the SAME Session after version_unsupported is faulted", async () => {
+  const { grade } = await import("../checks.mjs");
+  const keys = await f.agentKeys();
+  const serves = { ...f.ctx, servedVersions: ["1.0"], protocolVersion: "1.0" };
+  const log = [
+    await f.request(keys, convo({ sid: "s1", sub: "u1", version: "0.9", seq: 1, ...REFUSED })),
+    await f.request(keys, convo({ sid: "s1", sub: "u1", version: "1.0", seq: 2 })),
+  ];
+  const v = grade(log, serves).find(x => x.id === "version.new-session-after-unsupported");
+  assert.equal(v.verdict, "FAIL", `3.4 says it starts a NEW Session: ${v?.why}`);
+});
+
+test("resending in a NEW Session after version_unsupported is exactly what 3.4 prescribes", async () => {
+  const { grade } = await import("../checks.mjs");
+  const keys = await f.agentKeys();
+  const serves = { ...f.ctx, servedVersions: ["1.0"], protocolVersion: "1.0" };
+  const log = [
+    await f.request(keys, convo({ sid: "s1", sub: "u1", version: "0.9", seq: 1, ...REFUSED })),
+    await f.request(keys, convo({ sid: "s2", sub: "u1", version: "1.0", seq: 2 })),
+  ];
+  const v = grade(log, serves).find(x => x.id === "version.new-session-after-unsupported");
+  assert.notEqual(v.verdict, "FAIL", `a new Session is the prescribed recovery: ${v?.why}`);
+});
+
+test("with nothing refused for a version, the recovery rule has nothing to judge", async () => {
+  const { grade } = await import("../checks.mjs");
+  const keys = await f.agentKeys();
+  const serves = { ...f.ctx, servedVersions: ["1.0"], protocolVersion: "1.0" };
+  const log = [await f.request(keys, convo({ sid: "s1", sub: "u1", version: "1.0", seq: 1 }))];
+  const v = grade(log, serves).find(x => x.id === "version.new-session-after-unsupported");
+  assert.equal(v.verdict, "INCONCLUSIVE", "no refusal, so no recovery to judge");
 });
