@@ -308,7 +308,7 @@ export const CHECKS = [
         if (missing.length) note(bad, hits, r, `${r.method} ${r.path}: missing ${missing.join(", ")}`);
         if (empty.length) note(bad, hits, r, `${r.method} ${r.path}: empty ${empty.join(", ")}`);
         if (wrongType.length) note(bad, hits, r, `${r.method} ${r.path}: wrong type for ${wrongType.join(", ")}`);
-        const token = r.headers?.authorization;
+        const token = r.authorization ?? r.headers?.authorization;
         if (!token && jwt.payload.ath !== undefined)
           note(bad, hits, r, `${r.method} ${r.path}: ath present with no access token, which 5.2 says is left out`);
       }
@@ -851,12 +851,14 @@ export const CHECKS = [
     section: "5.2",
     quote: "`ath` is the SHA-256 hash of the access token, base64url-encoded, when the request carries one, as in a DPoP proof.",
     run(log) {
-      const s = sessionRequests(log).filter(x => x.r.headers?.authorization);
+      const s = sessionRequests(log).filter(x => x.r.authorization || x.r.headers?.authorization);
       if (!s.length) return SKIP("no request carried an access token");
       const bad = []; const hits = [];
       for (const { r, jwt } of s) {
-        const token = String(r.headers.authorization).replace(/^(DPoP|Bearer)\s+/i, "");
-        const want = createHash("sha256").update(token).digest("base64url");
+        // The stored hash, which is what the log keeps; a record from before the token was dropped
+        // still carries the raw header, and hashing it gives the same answer.
+        const want = r.authorization?.sha256
+          ?? createHash("sha256").update(String(r.headers.authorization).replace(/^(DPoP|Bearer)\s+/i, "")).digest("base64url");
         if (jwt.payload.ath === undefined) note(bad, hits, r, `${r.method} ${r.path}: a token was sent with no ath`);
         else if (jwt.payload.ath !== want) note(bad, hits, r, `${r.method} ${r.path}: ath is not the hash of the token sent`);
       }
@@ -1475,12 +1477,14 @@ export const CHECKS = [
       if (!withQuery.length) return SKIP("no request carried a query, so nothing could be in one");
       const bad = [];
       for (const { r, params } of withQuery) {
-        const auth = String(r.headers?.authorization ?? "").replace(/^\w+\s+/, "");
+        // The token itself is not in the log, so a query value is compared by its hash.
+        const authHash = r.authorization?.sha256
+          ?? (r.headers?.authorization ? createHash("sha256").update(String(r.headers.authorization).replace(/^\w+\s+/, "")).digest("base64url") : null);
         for (const [key, value] of params) {
           const jwt = decodeJwt(value);
           if (jwt?.header?.alg) { bad.push({ r, what: `${key} carries a JWT` }); continue; }
           if (/^(bearer|dpop)\s/i.test(value)) { bad.push({ r, what: `${key} carries a ${value.split(/\s/)[0]} token` }); continue; }
-          if (auth && value === auth) bad.push({ r, what: `${key} repeats this request's access token` });
+          if (authHash && createHash("sha256").update(value).digest("base64url") === authHash) bad.push({ r, what: `${key} repeats this request's access token` });
         }
       }
       return bad.length

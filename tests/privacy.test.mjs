@@ -90,3 +90,25 @@ test("session.jti-unique still tells two bodies apart when neither body was kept
   assert.notEqual(rule.run(same, f.ctx).verdict, "FAIL",
     "an identical resend is for the Company to reject, not a replay");
 });
+
+test("an access token sent in Authorization is not written to the log, and ath is still judged", async () => {
+  // The rules that read Authorization need presence, the scheme, and sha256 of the token: that is
+  // exactly what 5.2's `ath` is. The log kept the raw bearer token, which is a credential sitting
+  // on a shop's disk for weeks. Capture now stores { scheme, sha256, length } beside the headers
+  // and removes the value; session.ath compares the hash it already computes against the stored
+  // one, so a wrong ath still fails and a right one still passes.
+  const token = "tok-" + createHash("sha256").update("secret").digest("base64url").slice(0, 20);
+  const rec = captured("GET", "/poppy/orders", "", { authorization: `DPoP ${token}` });
+  assert.ok(!JSON.stringify(rec).includes(token), "the token value must not be in the record");
+  assert.equal(rec.authorization?.scheme, "DPoP");
+  assert.equal(rec.authorization?.sha256, createHash("sha256").update(token).digest("base64url"));
+  assert.equal(rec.headers.authorization, "DPoP [sha256]", "the header keeps its presence and scheme, not its secret");
+
+  const keys = await f.agentKeys();
+  const rule = CHECKS.find(c => c.id === "session.ath");
+  const right = await f.request(keys, { token, ath: createHash("sha256").update(token).digest("base64url") });
+  const wrong = await f.request(keys, { token, ath: "not-the-hash" });
+  assert.equal(rule.run([right], f.ctx).verdict, "PASS", "a correct ath still passes from the stored hash");
+  assert.equal(rule.run([wrong], f.ctx).verdict, "FAIL", "a wrong ath still fails");
+  assert.ok(!JSON.stringify(right).includes(token), "and the fixture carries no raw token either");
+});

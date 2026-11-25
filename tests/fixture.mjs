@@ -10,7 +10,7 @@
 // address literal, and the suite was green throughout.
 import { SignJWT, exportJWK, generateKeyPair, calculateJwkThumbprint } from "jose";
 import { randomUUID, createHash } from "node:crypto";
-import { isAuthServerEndpoint } from "../record.mjs";
+import { isAuthServerEndpoint, authorizationOf } from "../record.mjs";
 import { authServerEndpointsFor, contextOf } from "../discovery.mjs";
 
 // One derivation for every site in this fixture that builds a record by hand. Hand setting a
@@ -104,7 +104,7 @@ export async function request(keys, over = {}) {
     headers: {
       "poppy-session": over.noSession ? undefined : jwt,
       "poppy-version": over.version === null ? undefined : (over.version ?? "1.0"),
-      ...(over.token ? { authorization: `DPoP ${over.token}` } : {}),
+      ...(over.token ? { authorization: `DPoP [sha256]` } : {}),
       // Merged last, so a test can set a content type or any other header. It could not before,
       // and a rule that reads one then saw nothing: the THIRD field this fixture silently dropped
       // while the test that depended on it read as though it had been set.
@@ -133,6 +133,9 @@ export async function request(keys, over = {}) {
     ...(over.response !== undefined ? { response: over.response } : {}),
     ...(over.isResource !== undefined ? { isResource: over.isResource } : {}),
     ...(over.isAuthServer !== undefined ? { isAuthServer: over.isAuthServer } : {}),
+    // The same shape the recorder writes: the header holds a placeholder and the hash sits beside
+    // it, so no fixture record carries a raw token either.
+    authorization: over.token ? authorizationOf(`DPoP ${over.token}`) : null,
     issuerKeys: issuerKeysFor(keys, { clientId, ...over }),
   };
 }

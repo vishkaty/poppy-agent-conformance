@@ -714,6 +714,14 @@ export const MUTATIONS = [
     kills: "single-agent mode is byte for byte what judge returned before",
     find: '  if (attribution !== "by-issuer") return { run, report: buildRecordedReport(run) };',
     to: '  if (false) return { run, report: buildRecordedReport(run) };' },
+
+  // The access token is not in the log. These put it back, or stop judging ath from its hash.
+  { id: "privacy/token-kept-in-log", file: "record.mjs", tests: "tests/privacy.test.mjs",
+    kills: "an access token sent in Authorization is not written to the log, and ath is still judged",
+    find: "  if (a) h.authorization = `${a.scheme} [sha256]`;", to: "" },
+  { id: "privacy/ath-not-judged-from-hash", file: "checks.mjs", tests: "tests/privacy.test.mjs",
+    kills: "an access token sent in Authorization is not written to the log, and ath is still judged",
+    find: "        const want = r.authorization?.sha256", to: "        const want = undefined" },
 ];
 
 // Imported for its MUTATIONS list by a test that owns the count in the README. Everything

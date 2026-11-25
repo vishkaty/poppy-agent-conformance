@@ -99,6 +99,9 @@ function redactHeaders(h = {}, token) {
     const v = String(raw);
     if (name === "poppy-session" || name === "dpop") { out[name] = "<JWT, decoded below>"; continue; }
     if (name === "authorization") {
+      // The record already holds "<scheme> [sha256]" and the hash beside it; a record from before
+      // the token was dropped still carries the raw value, which is hashed here as before.
+      if (/\[sha256\]$/.test(v)) { out[name] = `${v.split(/\s/)[0]} <token not shown; sha256 base64url in authorization.sha256>`; continue; }
       const bare = v.replace(/^(DPoP|Bearer)\s+/i, "");
       // The hash is exactly the `ath` the agent must compute, so it adds nothing an
       // observer of the request did not have, and it lets the builder compare by eye.

@@ -97,6 +97,24 @@ function documents(cfg) {
 // shop runs one of its own, for its own app and its own staff, and RFC 6749 puts `grant_type`
 // in a form body and nowhere else, so a rule that looks for one anywhere in the log finds the
 // shop signing its own customers in and calls it a Personal Agent starting a sign-in.
+// What the log keeps of an Authorization header: presence, the scheme, and sha256 of the token,
+// base64url, which is exactly the `ath` 5.2 has the agent compute. Every rule that reads the header
+// needs one of those three and never the token itself, and the token is a credential sitting on a
+// shop's disk for weeks. The header keeps a placeholder so presence and scheme stay readable in
+// place; the secret is gone before the record exists.
+export function authorizationOf(value) {
+  if (typeof value !== "string" || value === "") return null;
+  const m = /^(\S+)\s+(.*)$/s.exec(value);
+  const scheme = m ? m[1] : value, token = m ? m[2] : "";
+  return { scheme, sha256: createHash("sha256").update(token).digest("base64url"), length: token.length };
+}
+export function redactAuthorization(headers) {
+  const h = { ...headers };
+  const a = authorizationOf(h.authorization);
+  if (a) h.authorization = `${a.scheme} [sha256]`;
+  return { headers: h, authorization: a };
+}
+
 export function isAuthServerEndpoint(url, cfg) {
   const x = u(url);
   const origin = originOf(cfg.origin);
@@ -282,7 +300,7 @@ export function recordOf(req, cfg, { at, body = null, bodyComplete = true } = {}
     host: originOf(url) ? new URL(url).host : null,
     method, url, path: originOf(url) ? norm(new URL(url).pathname) : null,
     at: at ?? Math.floor(Date.now() / 1000),
-    headers: { ...req.headers }, body, bodyComplete,
+    ...redactAuthorization(req.headers), body, bodyComplete,
     remoteAddress: sourceOf(req, cfg),
     isResource: c.isResource, isPage: c.isPage, mustNotCarry: c.mustNotCarry,
     isAuthServer: isAuthServerEndpoint(url, cfg),
