@@ -276,3 +276,52 @@ test("with nothing refused for a version, the recovery rule has nothing to judge
   const v = grade(log, serves).find(x => x.id === "version.new-session-after-unsupported");
   assert.equal(v.verdict, "INCONCLUSIVE", "no refusal, so no recovery to judge");
 });
+
+// ---- the two regressions the partition introduced, found by audit before the push ----
+
+test("the hosted Company refuses to list a version it does not implement", async () => {
+  // It implements 1.0 and serves one document. Listing 0.4 in supported_versions would make a
+  // 0.4 Session request OUT OF SCOPE: no rule reads it, enforce returns null, and the server read
+  // null as "the Session stands" and handed an unverified JWT to the conversation store. Measured:
+  // a Session JWT with its signature destroyed, declaring 0.4, was answered 201 with a conversation
+  // id. 3.4 forbids handling a request under another version; a Company that cannot handle 0.4
+  // must not claim to serve it. The guard is at the door, so the state cannot arise.
+  const { validateConfig } = await import("../server.mjs");
+  const { discoveryFor } = await import("../discovery.mjs");
+  const origin = "http://127.0.0.1:8";
+  const d = discoveryFor(origin);
+  assert.throws(() => validateConfig({ origin, discovery: { ...d, supported_versions: { "0.4": `${origin}/poppy/0.4.json` } } }),
+    /supported_versions.*0\.4/, "0.4 is not compatible with the 1.0 this Company implements");
+  assert.doesNotThrow(() => validateConfig({ origin, discovery: d }), "serving one version is the ordinary case");
+});
+
+test("at a valid hosted configuration no Session request can be out of scope", async () => {
+  // The property that makes the regression impossible rather than merely unlikely: with the guard
+  // above, every version this Company serves is 1.x, so a Session request is judged in full, or
+  // judged by the version rules alone and refused, and never silently unread.
+  const { contextOf, discoveryFor } = await import("../discovery.mjs");
+  const { versionScopeOf } = await import("../checks.mjs");
+  const ctx = contextOf(discoveryFor("http://127.0.0.1:8"));
+  const keys = await f.agentKeys();
+  for (const version of ["1.0", "1.7", "0.4", "0.3", "2.0", null, "junk"]) {
+    const r = await f.request(keys, { version, sub: "u", seq: 1 });
+    assert.notEqual(versionScopeOf(r, ctx), "out-of-scope", `declaring ${version} must be read by something here`);
+  }
+});
+
+test("gradePair honours the partition, so 0.x traffic is not compared across Companies", async () => {
+  // grade() filtered out-of-scope records but gradePair handed raw logs to the two pairwise rules,
+  // the ones the file itself calls the most dangerous: two 0.4 Sessions sharing a sub at two
+  // Companies were accused of letting the Companies match the User, on text this grader does not
+  // hold. Measured: grade faulted nothing, gradePair faulted both.
+  const { gradePair } = await import("../checks.mjs");
+  const keys = await f.agentKeys();
+  const serves = (identifier) => ({ ...f.ctx, identifier, servedVersions: ["1.0", "0.4"], protocolVersion: "1.0" });
+  const ctxA = serves("https://a.example/poppy"), ctxB = serves("https://b.example/poppy");
+  const at = async (ctx, version) => [await f.request(keys, { version, sub: "same-user", aud: ctx.identifier, seq: 1 })];
+  const faulted = gradePair(await at(ctxA, "0.4"), await at(ctxB, "0.4"), ctxA, ctxB).filter(v => v.verdict === "FAIL").map(v => v.id);
+  assert.deepEqual(faulted, [], `0.4 is served under a text this grader does not hold: ${faulted}`);
+  // The control: the same sub at two Companies under 1.0 is exactly the 5.1 breach.
+  const caught = gradePair(await at(ctxA, "1.0"), await at(ctxB, "1.0"), ctxA, ctxB).find(v => v.id === "pairwise.user-id");
+  assert.equal(caught.verdict, "FAIL", "the rule itself still works on 1.0 traffic");
+});

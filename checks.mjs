@@ -1683,5 +1683,11 @@ export function grade(log, ctx) {
   });
 }
 export function gradePair(logA, logB, ctxA, ctxB) {
-  return PAIRWISE.map(c => ({ id: c.id, section: c.section, quote: c.quote, ...c.run(logA, logB, ctxA, ctxB) }));
+  // The same partition grade applies, per log with its own Company's context. Without it the
+  // two pairwise rules, which this file calls the most dangerous checks here, compared 0.x
+  // Sessions across Companies and accused them on text this grader does not hold, while grade
+  // had correctly read nothing of theirs.
+  const inScope = (log, ctx) => (log ?? []).filter(r => ["judged", "no-session"].includes(versionScopeOf(r, ctx)));
+  const a = inScope(logA, ctxA), b = inScope(logB, ctxB);
+  return PAIRWISE.map(c => ({ id: c.id, section: c.section, quote: c.quote, ...c.run(a, b, ctxA, ctxB) }));
 }

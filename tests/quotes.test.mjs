@@ -105,6 +105,15 @@ test("the README states the real number of mutations", async () => {
   const n = MUTATIONS.length;
   assert.ok(readme.toLowerCase().includes(`${spell(n)} mutations`) || readme.includes(`${n} mutations`),
     `the README does not say "${spell(n)} mutations", nor "${n} mutations"`);
+  // The rule count that sits in the same sentence. It was derived everywhere else and not here,
+  // so the 41st rule left "Forty rules, and 178 mutations" standing with the mutation half
+  // correct and the rule half stale, one day after three other stale counts were fixed. Two
+  // independent reviews found it in the same hour. A count the suite owns in one sentence and
+  // not the next is a count the suite does not own.
+  const total = CHECKS.length + PAIRWISE.length;
+  const cap = (w) => w[0].toUpperCase() + w.slice(1);
+  assert.ok(readme.includes(`${cap(spell(total))} rules, and ${n} mutations`),
+    `the README does not say "${cap(spell(total))} rules, and ${n} mutations"`);
 });
 
 test("the README states the real number of checks", () => {

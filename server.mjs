@@ -11,7 +11,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { recordOf, classify, pathOf, allowedMethodsFor, conversationRouteOf, readBody, isUnsafeTarget } from "./record.mjs";
 import { createConversations } from "./conversations.mjs";
-import { resourceMetadataFor, authServerMetadataFor, authServerMetadataPath, discoveryFor, openapiFor, operationsToTemplates, DEFAULT_OPERATIONS, identifierOf, authServerEndpointsFor, contextOf } from "./discovery.mjs";
+import { resourceMetadataFor, authServerMetadataFor, authServerMetadataPath, discoveryFor, openapiFor, operationsToTemplates, DEFAULT_OPERATIONS, identifierOf, authServerEndpointsFor, contextOf, compatible } from "./discovery.mjs";
 import { enforce, tokenChallenge } from "./enforce.mjs";
 import { createIssuerKeys } from "./issuer-keys.mjs";
 
@@ -60,6 +60,19 @@ export function validateConfig(cfg) {
   for (const e of cfg.authServerEndpoints ?? []) listed.push(["authServerEndpoints[]", e]);
   for (const [v, url] of Object.entries(d.supported_versions ?? {}))
     if (url) listed.push([`supported_versions[${v}]`, url]);
+
+  // 3.4 has a Company serve several versions by publishing a document for each and handling each
+  // request under the version it declares, and "MUST NOT handle the request under another
+  // version". This Company implements one version and serves one document, so an entry naming a
+  // version it cannot handle is refused at the door rather than published. Letting one through
+  // put every Session request declaring it OUT OF SCOPE: no rule read it, enforce returned null,
+  // and the server read null as the Session standing. Measured: a Session JWT with its signature
+  // destroyed, declaring 0.4 at a document listing 0.4, was answered 201 with a conversation id,
+  // which is the 5.3 breach the conversation guard exists to prevent.
+  for (const v of Object.keys(d.supported_versions ?? {}))
+    if (!compatible(v, d.protocol_version))
+      throw new Error(`supported_versions lists ${v}, which this Company does not implement: it serves`
+        + ` ${d.protocol_version} and handles no request under another version (3.4)`);
 
   // A destination under the caller's control-plane prefix would be answered by the control
   // plane and examined by no rule, which reads as conformance. Refused, not shadowed.

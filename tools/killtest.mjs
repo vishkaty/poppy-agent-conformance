@@ -692,6 +692,14 @@ export const MUTATIONS = [
     kills: "session.jti-unique still tells two bodies apart when neither body was kept",
     find: '        const bodyKey = r.bodySha256 ?? createHash("sha256").update(r.body ?? "").digest("hex");',
     to: '        const bodyKey = r.body ?? "";' },
+
+  // The two regressions the version partition introduced, found by audit before the push.
+  { id: "versions/hosted-claims-unimplemented-version", file: "server.mjs", tests: "tests/versions.test.mjs",
+    kills: "the hosted Company refuses to list a version it does not implement",
+    find: "    if (!compatible(v, d.protocol_version))", to: "    if (false)" },
+  { id: "versions/pair-unpartitioned", file: "checks.mjs", tests: "tests/versions.test.mjs",
+    kills: "gradePair honours the partition, so 0.x traffic is not compared across Companies",
+    find: "  const a = inScope(logA, ctxA), b = inScope(logB, ctxB);", to: "  const a = logA ?? [], b = logB ?? [];" },
 ];
 
 // Imported for its MUTATIONS list by a test that owns the count in the README. Everything
