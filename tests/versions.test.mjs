@@ -96,7 +96,11 @@ test("a log recorded before the served set existed judges exactly like one recor
               // the shape a recorder wrote before `servedVersions` was a field at all
               ctx: { identifier: "https://shop.example/poppy", domain: "shop.example",
                      protocolVersion: "1.0", authDisabled: true, extensions: [] } },
-    records: [await f.request(keys, { version: "0.4", sub: "user-one", seq: 1 })],
+    // A 1.0 request, deliberately. A 0.4 one would be OUT OF SCOPE at this Company once the
+    // partition exists, so it abstains either way and could not tell the two cases apart. With
+    // the served set recovered from the document this passes; without it the rule abstains with
+    // cause grader because it was told no version at all.
+    records: [await f.request(keys, { version: "1.0", sub: "user-one", seq: 1 })],
   };
   const { report } = judge([run], { graderCommit: "test" });
   const v = report.rules.find(r => r.id === "version.sent");
@@ -107,4 +111,81 @@ test("a log recorded before the served set existed judges exactly like one recor
   assert.equal(v.worst, "PASS",
     `0.4 is listed in this Company's own supported_versions, so a 0.4 agent conforms here: ${JSON.stringify(v.perCompany)}`);
   assert.equal(v.perCompany[0].cause ?? null, null, "nothing should abstain: the document is in the header");
+});
+
+// ---- the scoping partition: what a 1.0 instrument may read at all ----
+//
+// 1.0 line 298 begins "From 1.0", so its promise that `protocol_version`,
+// `supported_versions`, `Poppy-Version` and `version_unsupported` keep their meaning in every
+// version is a promise 1.0 makes about itself and later versions. It cannot bind 0.3 or 0.4.
+// Line 7 says 1.0 is "0.4 with the fixes implementers needed, which the changelog lists", and
+// this repository holds only 1.0. So a 1.0 sentence applied to a 0.x request is a claim the
+// instrument cannot ground, in either direction.
+const BREACHES = await import("./breaches.mjs");
+
+async function logOf(keys, over) {
+  const breach = await BREACHES.BREACH["session.alg"](keys);
+  return breach.map(r => ({ ...r, headers: { ...r.headers, ...(over.headers ?? {}) } }));
+}
+
+test("a breach under a version this Company serves beside 1.0 is judged by NO rule of 1.0", async () => {
+  const { grade } = await import("../checks.mjs");
+  const keys = await f.agentKeys();
+  const serves = { ...f.ctx, servedVersions: ["1.0", "0.4"], protocolVersion: "1.0" };
+  const log = await logOf(keys, { headers: { "poppy-version": "0.4" } });
+  const faulted = grade(log, serves).filter(v => v.verdict === "FAIL").map(v => v.id);
+  assert.deepEqual(faulted, [],
+    `0.4 is a version this Company serves and no 0.4 text is held here, so nothing may be claimed: ${faulted}`);
+});
+
+test("the same breach at 1.0 is still caught in full, which is the control", async () => {
+  const { grade } = await import("../checks.mjs");
+  const keys = await f.agentKeys();
+  const serves = { ...f.ctx, servedVersions: ["1.0", "0.4"], protocolVersion: "1.0" };
+  const log = await logOf(keys, { headers: { "poppy-version": "1.0" } });
+  assert.ok(grade(log, serves).some(v => v.id === "session.alg" && v.verdict === "FAIL"),
+    "a 1.0 request is judged by every 1.0 rule");
+});
+
+test("a version nothing serves is judged by the version rule alone", async () => {
+  const { grade } = await import("../checks.mjs");
+  const keys = await f.agentKeys();
+  const serves = { ...f.ctx, servedVersions: ["1.0", "0.4"], protocolVersion: "1.0" };
+  const log = await logOf(keys, { headers: { "poppy-version": "2.0" } });
+  const verdicts = grade(log, serves);
+  assert.equal(verdicts.find(v => v.id === "version.sent").verdict, "FAIL",
+    "2.0 is compatible with nothing this Company serves, and 3.4 keeps its meaning in every version");
+  const others = verdicts.filter(v => v.id !== "version.sent" && v.verdict === "FAIL").map(v => v.id);
+  assert.deepEqual(others, [], `no other 1.0 rule may read a 2.0 request: ${others}`);
+});
+
+test("a Session request with no version is out of scope where a pre-0.4 version is served", async () => {
+  const { grade } = await import("../checks.mjs");
+  const keys = await f.agentKeys();
+  // `Poppy-Version` arrived in 0.4, so a conforming 0.3 agent sends none and is indistinguishable
+  // from a 1.0 agent that omitted it. At a Company serving 0.3 the request cannot be judged.
+  const serves = { ...f.ctx, servedVersions: ["1.0", "0.3"], protocolVersion: "1.0" };
+  const log = [await f.request(keys, { version: null, sub: "user-one", seq: 1 })];
+  const faulted = grade(log, serves).filter(v => v.verdict === "FAIL").map(v => v.id);
+  assert.deepEqual(faulted, [], `0.3 is served here, so an absent version is ambiguous: ${faulted}`);
+});
+
+test("a Session request with no version IS faulted where only 1.0 is served, the control", async () => {
+  const { grade } = await import("../checks.mjs");
+  const keys = await f.agentKeys();
+  const serves = { ...f.ctx, servedVersions: ["1.0"], protocolVersion: "1.0" };
+  const log = [await f.request(keys, { version: null, sub: "user-one", seq: 1 })];
+  assert.equal(grade(log, serves).find(v => v.id === "version.sent").verdict, "FAIL",
+    "every version this Company serves requires the header, so an absent one is the agent's breach");
+});
+
+test("only the two rules about `Poppy-Version` itself may read a version this Company does not serve", async () => {
+  // The flag is the whole exception to the partition, so it must not spread quietly. 1.0 line 298
+  // names `protocol_version`, `supported_versions`, `Poppy-Version` and `version_unsupported` as
+  // keeping their meaning in every version, and the only rules resting on that are the two about
+  // the header itself. Anything else carrying the flag would be a 1.0 sentence applied to traffic
+  // 1.0 does not govern.
+  const { CHECKS } = await import("../checks.mjs");
+  const flagged = CHECKS.filter(c => c.appliesTo === "every version").map(c => c.id).sort();
+  assert.deepEqual(flagged, ["version.constant", "version.sent"]);
 });

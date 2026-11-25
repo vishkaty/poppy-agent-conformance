@@ -639,6 +639,25 @@ export const MUTATIONS = [
     kills: "a log recorded before the served set existed judges exactly like one recorded after",
     find: "const ctx = run.header?.discovery ? contextOf(run.header.discovery) : run.header?.ctx;",
     to: "const ctx = run.header?.ctx;" },
+
+  // The scoping partition. A sentence of 1.0 may only read a request speaking 1.0; each of
+  // these hands 1.0 rules a request they cannot ground a verdict on.
+  { id: "versions/scope-ignored", file: "checks.mjs", tests: "tests/versions.test.mjs",
+    kills: "a breach under a version this Company serves beside 1.0 is judged by NO rule of 1.0",
+    find: '    const seen = c.appliesTo === "every version" ? everyVersion : inScope;',
+    to: "    const seen = records;" },
+  { id: "versions/incompatible-judged-in-full", file: "checks.mjs", tests: "tests/versions.test.mjs",
+    kills: "a version nothing serves is judged by the version rule alone",
+    find: '  const inScope = records.filter(r => ["judged", "no-session"].includes(scope.get(r)));',
+    to: '  const inScope = records.filter(r => scope.get(r) !== "out-of-scope");' },
+  { id: "versions/undeclared-charged-at-pre-0.4-host", file: "checks.mjs", tests: "tests/versions.test.mjs",
+    kills: "a Session request with no version is out of scope where a pre-0.4 version is served",
+    find: '  if (!isVersion(v)) return served.some(predatesTheHeader) ? "out-of-scope" : "judged";',
+    to: '  if (!isVersion(v)) return "judged";' },
+  { id: "versions/other-major-judged-as-1.0", file: "checks.mjs", tests: "tests/versions.test.mjs",
+    kills: "a breach under a version this Company serves beside 1.0 is judged by NO rule of 1.0",
+    find: '  return majorOf(match) === 1 ? "judged" : "out-of-scope";',
+    to: '  return "judged";' },
 ];
 
 // Imported for its MUTATIONS list by a test that owns the count in the README. Everything

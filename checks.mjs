@@ -599,6 +599,12 @@ export const CHECKS = [
   {
     id: "version.sent",
     section: "3.4",
+    // The ONE rule that reads a request whose declared version this Company does not serve.
+    // Warranted by 3.4's own closing sentence: "From 1.0, the location of `poppy.json` and how it
+    // is fetched (section 3), `protocol_version`, `supported_versions`, `Poppy-Version`, and
+    // `version_unsupported` keep their meaning in every version". Every other rule of 1.0 is a
+    // sentence about a 1.0 request and is not given one that is not.
+    appliesTo: "every version",
     quote: "On every request with the Session header (5.2), the Personal Agent sends the protocol version it implements, compatible with the chosen one, in `Poppy-Version`, as `major.minor`.",
     // The per-request half of the version rule, and the half a Company acts on. 3.4: "An
     // endpoint that verifies the Session header (5.3) MUST also check `Poppy-Version`. It
@@ -633,6 +639,12 @@ export const CHECKS = [
   {
     id: "version.constant",
     section: "3.4",
+    // Reads a version this Company does not serve, on the same warrant as version.sent: line 298
+    // names `Poppy-Version` itself among the things that "keep their meaning in every version",
+    // and this sentence is about the values of that header. An agent that sends 1.0 on three
+    // requests and 0.9 on the next has changed them inside one Session whichever versions those
+    // are, and scoping this rule to 1.0 traffic alone hid the 0.9 half of exactly that change.
+    appliesTo: "every version",
     quote: "The Personal Agent MUST send the same values on every request in a Session, and starts a new Session to change them.",
     // The quote here was a placeholder for an hour: a real sentence about
     // `supported_versions` URLs, which is a different rule in the same section. The verbatim
@@ -1566,8 +1578,51 @@ export const PAIRWISE = [
   },
 ];
 
+// `Poppy-Version` arrived in 0.4. That fact is not in the 1.0 capture, so it is cited to the
+// authors' own changelog, under the 0.4 heading "Several protocol versions", where the agent
+// "names it in `Poppy-Version` on every request with the Session header". A conforming agent of
+// an older version sends none, so at a Company that still serves such a version an absent header
+// is indistinguishable from a 1.0 agent that omitted it, and cannot be charged to either.
+const predatesTheHeader = (v) => {
+  const m = /^(\d+)\.(\d+)$/.exec(String(v ?? ""));
+  return !!m && Number(m[1]) === 0 && Number(m[2]) < 4;
+};
+const majorOf = (v) => Number(/^(\d+)\./.exec(String(v ?? ""))?.[1]);
+
+// Which rules, if any, may read a request at all. 3.4 lets a Company serve several versions at
+// once, so a request declares which one it is speaking, and a sentence of 1.0 can only bind a
+// request that is speaking 1.0. Line 298 begins "From 1.0", so the promise that
+// `protocol_version`, `supported_versions`, `Poppy-Version` and `version_unsupported` keep their
+// meaning in every version is one 1.0 makes about itself and later versions; it cannot reach back
+// to 0.3 or 0.4. Line 7 says 1.0 is "0.4 with the fixes implementers needed, which the changelog
+// lists", and this repository holds 1.0 alone, so a 1.0 verdict on a 0.x request is ungrounded in
+// both directions: a false FAIL against a conforming older agent, or a PASS we cannot justify.
+export function versionScopeOf(r, ctx) {
+  // 3.4: "Requests without the Session header, such as discovery and OAuth requests, don't carry
+  // these headers." Those declare no version by design and are judged as they always were.
+  if (typeof r?.headers?.["poppy-session"] !== "string") return "no-session";
+  const served = (ctx?.servedVersions ?? []).filter(isVersion);
+  // Nothing known about this Company. version.sent abstains as our limit and the rest behave as
+  // before, rather than silently treating an unconfigured recorder as a 1.0 Company.
+  if (!served.length) return "judged";
+  const v = r.headers["poppy-version"];
+  if (!isVersion(v)) return served.some(predatesTheHeader) ? "out-of-scope" : "judged";
+  const match = served.find(s => compatible(v, s));
+  if (!match) return "version-only";
+  return majorOf(match) === 1 ? "judged" : "out-of-scope";
+}
+
 export function grade(log, ctx) {
-  return CHECKS.map(c => ({ id: c.id, section: c.section, quote: c.quote, ...c.run(log, ctx) }));
+  const records = log ?? [];
+  const scope = new Map(records.map(r => [r, versionScopeOf(r, ctx)]));
+  const inScope = records.filter(r => ["judged", "no-session"].includes(scope.get(r)));
+  // A rule marked `appliesTo: "every version"` also sees a request whose declared version this
+  // Company does not serve, on the warrant of line 298. Out of scope records reach nothing.
+  const everyVersion = records.filter(r => scope.get(r) !== "out-of-scope");
+  return CHECKS.map(c => {
+    const seen = c.appliesTo === "every version" ? everyVersion : inScope;
+    return { id: c.id, section: c.section, quote: c.quote, ...c.run(seen, ctx) };
+  });
 }
 export function gradePair(logA, logB, ctxA, ctxB) {
   return PAIRWISE.map(c => ({ id: c.id, section: c.section, quote: c.quote, ...c.run(logA, logB, ctxA, ctxB) }));
