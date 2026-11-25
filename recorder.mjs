@@ -27,7 +27,7 @@ import { recordOf, readBody, isUnsafeTarget } from "./record.mjs";
 import { contextOf } from "./discovery.mjs";
 import { buildReport } from "./report.mjs";
 import { decodeJwt } from "./checks.mjs";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { validateConfig } from "./server.mjs";
 
 // Hop by hop headers belong to one connection and are the proxy's own business (RFC 9110 7.6.1).
@@ -210,7 +210,15 @@ export function createRecorder(cfg) {
 // killed. A JSON array would need rewriting on every record and would be truncated garbage if
 // the process died mid-run; a line is either complete or it is the last one and discarded.
 export function openRunFile(path, header) {
-  writeFileSync(path, JSON.stringify({ kind: "poppy-recorded-run", version: 1, ...header }) + "\n");
+  // A random salt per log file, written into the header. The report tags a source address with a
+  // hash of it; with no salt that tag was sha256 of the address, and eight hex characters invert
+  // over the whole IPv4 space by table lookup, so a shopper address was recoverable from any
+  // report the operator forwarded. The salt lives in the FILE rather than being generated at
+  // judgement, because a verdict and everything beside it must be a pure function of the log: the
+  // same file judges to the same tags every time, and two files give different tags for one
+  // address, so a reader cannot join an operator's runs either.
+  const addressSalt = header.addressSalt ?? randomBytes(16).toString("hex");
+  writeFileSync(path, JSON.stringify({ kind: "poppy-recorded-run", version: 1, addressSalt, ...header }) + "\n");
   return { path };
 }
 
@@ -265,7 +273,10 @@ export function judge(runs, { graderCommit = "unknown", token = "", attribution 
   // Ordinals are assigned across the whole run in time order, so a log appended out of order
   // still reads as one timeline.
   for (const c of companies) c.log.sort((x, y) => (x.at ?? 0) - (y.at ?? 0));
-  const run = { companies, token, graderCommit, mode: "recorded" };
+  // The salt from the header stands in for a lease token in a recorded run, which is what the
+  // report salts a source address with. A hosted run has its own token and keeps it.
+  const salt = token || runs.map(r => r.header?.addressSalt).find(Boolean) || "";
+  const run = { companies, token: salt, graderCommit, mode: "recorded" };
   if (attribution !== "by-issuer") return { run, report: buildRecordedReport(run) };
 
   // By the client_id each Session JWT claimed. In front of a real store the log holds many agents
@@ -292,7 +303,7 @@ export function judge(runs, { graderCommit = "unknown", token = "", attribution 
   for (const c of companies) for (const r of c.log) { const i = issOf(r); if (i) issuers.add(i); else unattributedCount++; }
   const agents = [...issuers].sort().map(iss => {
     const own = companies.map(c => ({ ...c, log: c.log.filter(r => issOf(r) === iss) }));
-    const groupRun = { companies: own, token, graderCommit, mode: "recorded" };
+    const groupRun = { companies: own, token: salt, graderCommit, mode: "recorded" };
     return {
       iss,
       tag: createHash("sha256").update(iss).digest("hex").slice(0, 16),

@@ -683,7 +683,7 @@ than a citation.
 
 Early, and honest about what has been measured.
 
-Forty one rules, and 185 mutations that each break one guard and require a named test
+Forty one rules, and 187 mutations that each break one guard and require a named test
 to notice. The test count is deliberately not quoted here: it went stale twice in one day, and
 `npm test` prints it. It has been run against synthetic traffic, against traffic minted by the
 authors own signing code, and end to end through a tunnel at a real hostname on 443. That last

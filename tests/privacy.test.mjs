@@ -112,3 +112,38 @@ test("an access token sent in Authorization is not written to the log, and ath i
   assert.equal(rule.run([wrong], f.ctx).verdict, "FAIL", "a wrong ath still fails");
   assert.ok(!JSON.stringify(right).includes(token), "and the fixture carries no raw token either");
 });
+
+test("the source tag is salted from the log header, so it is unguessable and still deterministic", async () => {
+  // In a recorded run the salt was the empty string, so the tag was sha256 of the address and the
+  // eight hex characters inverted over the whole IPv4 space by table lookup: a shopper address was
+  // recoverable from any report the operator forwarded. The salt is random per log FILE and lives
+  // in the header, which keeps judge a pure function of the file: the same log judges to the same
+  // tags every time, and two different logs give different tags for the same address.
+  const { judge, openRunFile, appendRecord, readRun } = await import("../recorder.mjs");
+  const { mkdtempSync, readFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const keys = await f.agentKeys();
+  const discovery = { protocol_version: "1.0", organization: { domain: "shop.example" },
+                      auth: { issuer: "https://shop.example/poppy", disabled: true } };
+  const ADDRESS = "203.0.113.77";
+
+  const write = () => {
+    const dir = mkdtempSync(join(tmpdir(), "poppy-salt-"));
+    const path = join(dir, "run.jsonl");
+    const file = openRunFile(path, { origin: "https://shop.example", discovery });
+    return { path, file };
+  };
+  const one = write(), two = write();
+  for (const { file } of [one, two])
+    appendRecord(file, { ...(await f.request(keys, { sub: "u", seq: 1 })), remoteAddress: ADDRESS });
+
+  const header = JSON.parse(readFileSync(one.path, "utf8").split("\n")[0]);
+  assert.match(String(header.addressSalt ?? ""), /^[0-9a-f]{32,}$/, "the header carries a random salt");
+
+  const tagOf = (p) => judge([readRun(p)], { graderCommit: "t" }).report.requests[0].source;
+  assert.notEqual(tagOf(one.path), createHash("sha256").update(ADDRESS).digest("hex").slice(0, 8),
+    "the tag must not be the bare hash of the address");
+  assert.equal(tagOf(one.path), tagOf(one.path), "the same file judges to the same tag every time");
+  assert.notEqual(tagOf(one.path), tagOf(two.path), "two logs give different tags for one address");
+});

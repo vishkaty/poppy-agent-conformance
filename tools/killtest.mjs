@@ -722,6 +722,17 @@ export const MUTATIONS = [
   { id: "privacy/ath-not-judged-from-hash", file: "checks.mjs", tests: "tests/privacy.test.mjs",
     kills: "an access token sent in Authorization is not written to the log, and ath is still judged",
     find: "        const want = r.authorization?.sha256", to: "        const want = undefined" },
+
+  // The source address tag. Unsalted it inverted over the IPv4 space; generated at judgement it
+  // would stop being a function of the file.
+  { id: "privacy/address-tag-unsalted", file: "recorder.mjs", tests: "tests/privacy.test.mjs",
+    kills: "the source tag is salted from the log header, so it is unguessable and still deterministic",
+    find: '  const addressSalt = header.addressSalt ?? randomBytes(16).toString("hex");',
+    to: '  const addressSalt = "";' },
+  { id: "privacy/address-salt-ignored", file: "recorder.mjs", tests: "tests/privacy.test.mjs",
+    kills: "the source tag is salted from the log header, so it is unguessable and still deterministic",
+    find: '  const salt = token || runs.map(r => r.header?.addressSalt).find(Boolean) || "";',
+    to: '  const salt = token || "";' },
 ];
 
 // Imported for its MUTATIONS list by a test that owns the count in the README. Everything
