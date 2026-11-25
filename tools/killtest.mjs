@@ -752,6 +752,17 @@ export const MUTATIONS = [
   { id: "robust/undecodable-body-guessed", file: "record.mjs", tests: "tests/robustness.test.mjs",
     kills: "a body this grader cannot decode is declared, not guessed",
     find: '    record.body = text ?? "";', to: '    record.body = text ?? raw.toString("utf8");' },
+
+  // The chunked read. One string of the whole file put a hard 512 MiB ceiling on a judgeable log,
+  // and a per chunk toString corrupts a character that straddles a boundary.
+  { id: "robust/log-read-as-one-string", file: "recorder.mjs", tests: "tests/robustness.test.mjs",
+    kills: "a log is read in chunks, so one record longer than a chunk still arrives whole",
+    find: "      const n = readSync(fd, buf, 0, chunkBytes, null);",
+    to: "      const n = readSync(fd, buf, 0, chunkBytes, reads === 0 ? 0 : null);" },
+  { id: "robust/chunk-decoded-without-state", file: "recorder.mjs", tests: "tests/robustness.test.mjs",
+    kills: "a log is read in chunks, so one record longer than a chunk still arrives whole",
+    find: "      pending += decoder.write(buf.subarray(0, n));",
+    to: '      pending += buf.subarray(0, n).toString("utf8");' },
 ];
 
 // Imported for its MUTATIONS list by a test that owns the count in the README. Everything

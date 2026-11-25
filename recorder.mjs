@@ -22,12 +22,13 @@
 //     recorder is not the Company. Writing an upstream refusal into that field would make a
 //     report claim this grader did the refusing.
 import { createServer, request as upstreamRequest } from "node:http";
-import { appendFileSync, openSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { appendFileSync, openSync, readFileSync, writeFileSync, existsSync, readSync, closeSync } from "node:fs";
 import { recordOf, readBody, isUnsafeTarget } from "./record.mjs";
 import { contextOf } from "./discovery.mjs";
 import { buildReport } from "./report.mjs";
 import { decodeJwt } from "./checks.mjs";
 import { createHash, randomBytes } from "node:crypto";
+import { StringDecoder } from "node:string_decoder";
 import { validateConfig } from "./server.mjs";
 
 // Hop by hop headers belong to one connection and are the proxy's own business (RFC 9110 7.6.1).
@@ -246,8 +247,34 @@ export function appendRecord(file, record) {
   appendFileSync(file.path, JSON.stringify(record) + "\n");
 }
 
-export function readRun(path) {
-  const lines = readFileSync(path, "utf8").split("\n").filter(l => l.trim() !== "");
+// Read in chunks, never as one string. `readFileSync(path, "utf8")` builds a string of the whole
+// file, and a string cannot exceed about 512 MiB on this runtime, so a log above that could not be
+// judged at all: at roughly 3 KB a record that is about 180 thousand requests, which a fortnight in
+// front of a busy store passes. A line is still assembled whole however the chunks fall, and the
+// number of reads is reported so a test can tell a chunked read from a one shot one.
+export function readRun(path, { chunkBytes = 1 << 20 } = {}) {
+  const fd = openSync(path, "r");
+  const buf = Buffer.allocUnsafe(chunkBytes);
+  const lines = [];
+  const decoder = new StringDecoder("utf8");
+  let pending = "", reads = 0;
+  try {
+    for (;;) {
+      const n = readSync(fd, buf, 0, chunkBytes, null);
+      reads++;
+      if (n === 0) break;
+      // Decoded per chunk with a stateful decoder, so a multibyte character split across a chunk
+      // boundary is not corrupted, which a per chunk toString would do.
+      pending += decoder.write(buf.subarray(0, n));
+      let i;
+      while ((i = pending.indexOf("\n")) !== -1) {
+        const line = pending.slice(0, i); pending = pending.slice(i + 1);
+        if (line.trim() !== "") lines.push(line);
+      }
+    }
+  } finally { closeSync(fd); }
+  pending += decoder.end();
+  if (pending.trim() !== "") lines.push(pending);
   if (!lines.length) throw new Error(`${path} is empty, so there is no run in it`);
   const header = JSON.parse(lines[0]);
   if (header.kind !== "poppy-recorded-run")
@@ -261,7 +288,7 @@ export function readRun(path) {
     // it. Each unreadable line is skipped and counted instead.
     try { records.push(JSON.parse(line)); } catch { unreadableLines++; }
   }
-  return { header, records, unreadableLines };
+  return { header, records, unreadableLines, reads };
 }
 
 // Group recordings into Companies and judge them.
