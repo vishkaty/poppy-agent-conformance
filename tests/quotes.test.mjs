@@ -176,3 +176,32 @@ test("the README states the real number of rules that are reported and never ref
   assert.ok(readme.includes(`${cap(spell(n))} rules are reported and never refused`),
     `the README does not say "${cap(spell(n))} rules are reported and never refused" for ${n}`);
 });
+
+test("a specification sentence quoted in a code comment is in the capture, like a quote field", () => {
+  // The comment above the version rule quoted 3.4's compatibility sentence truncated at "the same
+  // major version.", a sentence that appears nowhere in the capture, and the code did exactly what
+  // the truncation said. The quote field is checked; a comment was not. Any comment line that
+  // carries a section number and a double quoted run of six or more words is now held to the same
+  // standard, across every page of the capture. A comment may opt out with (not 1.0).
+  const pages = readdirSync(SNAP).filter(f => f.endsWith(".md"))
+    .map(f => readFileSync(join(SNAP, f), "utf8")).join("\n").replace(/\s+/g, " ");
+  const sources = readdirSync(join(HERE, "..")).filter(f => f.endsWith(".mjs"));
+  const wrong = [];
+  for (const file of sources) {
+    const lines = readFileSync(join(HERE, "..", file), "utf8").split("\n");
+    lines.forEach((line, i) => {
+      const comment = /^\s*\/\/(.*)$/.exec(line);
+      if (!comment || comment[1].includes("(not 1.0)")) return;
+      if (!/\b\d\.\d{1,2}\b/.test(comment[1])) return;
+      for (const m of comment[1].matchAll(/"([^"]{20,}?)"/g)) {
+        const q = m[1].replace(/\s+/g, " ");
+        if (q.split(" ").length < 6) continue;
+        // An elision is an abridgement, not a quotation, and a fragment opening with punctuation is
+        // prose being set off, not a sentence being cited. Both are left to review.
+        if (q.includes("...") || q.includes("\u2026") || !/^[A-Za-z`]/.test(q)) continue;
+        if (!pages.includes(q)) wrong.push(`${file}:${i + 1}: "${q.slice(0, 70)}"`);
+      }
+    });
+  }
+  assert.deepEqual(wrong, [], `a comment quotes a sentence the capture does not contain:\n  ${wrong.join("\n  ")}`);
+});

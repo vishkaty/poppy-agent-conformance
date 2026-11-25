@@ -111,6 +111,9 @@ export async function request(keys, over = {}) {
       ...(over.headers ?? {}),
     },
     body: over.body ?? "",
+    // readBody leaves a finished body with bodyComplete true; a record that never says so is read
+    // by every rule as complete anyway, which is what a hand built record silently relied on.
+    bodyComplete: true,
     conversationRoute: over.conversationRoute ?? null,
     // Carried through, because a test that says a body was truncated or that a target was refused
     // and is then silently given a clean record is a test that proves the opposite of what it
@@ -157,6 +160,8 @@ export async function conformingLog(keys, over = {}) {
     host: DOMAIN, method: "GET", path: "/.well-known/poppy.json",
     url: ORIGIN + "/.well-known/poppy.json", at: Math.floor(Date.now() / 1000),
     isResource: false, isPage: false, mustNotCarry: true,
+    isAuthServer: authServerFlag("/.well-known/poppy.json"),
+    conversationRoute: null,
     classifiedAs: "a discovery or description document, or an OAuth endpoint (5.2)",
     headers: {}, body: null, sessionHeaderCount: 0, sessionHeaderDecodable: false,
     sessionHeaderDuplicated: false,
@@ -169,6 +174,7 @@ export async function conformingLog(keys, over = {}) {
     host: DOMAIN, method: "POST", path: "/poppy/token", url: ORIGIN + "/poppy/token",
     at: Math.floor(Date.now() / 1000), isResource: false, isPage: false, mustNotCarry: true,
     isAuthServer: authServerFlag("/poppy/token"),
+    conversationRoute: null,
     classifiedAs: "a discovery or description document, or an OAuth endpoint (5.2)",
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body: "grant_type=refresh_token&refresh_token=rt_example", bodyComplete: true,

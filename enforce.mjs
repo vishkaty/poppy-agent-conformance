@@ -124,7 +124,7 @@ export function enforce(record, ctx) {
     return {
       rule: id, status,
       headers: { "content-type": "application/json" },
-      // 5.3: "Either MAY include an error_description for the developer, as in RFC 6749 §5.2."
+      // 5.3: "Either MAY include an `error_description` for the developer", as in RFC 6749 §5.2.
       // It is the report's own sentence, so what the agent is told and what the report says
       // cannot differ. The checks' `why` carries no JWT, signature or token by construction,
       // and a test asserts that here too.

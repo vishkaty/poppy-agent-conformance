@@ -184,7 +184,8 @@ export function createConversations({ max = 200 } = {}) {
     if (route === "close") {
       if (!c.closed) {
         c.closed = true;
-        // 8.7: "Every change to handoff, responder, or closed has a state event."
+        // 8.7: "Every change to `handoff`, `responder`, or `closed` adds a `state` event with all
+        // three, even if there is no new text."
         add(c, { type: "state", ...state(c) });
       }
       return remember({ status: 202, body: { conversation_id: c.id } });
