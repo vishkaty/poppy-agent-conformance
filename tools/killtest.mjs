@@ -677,6 +677,21 @@ export const MUTATIONS = [
     kills: "resending in a NEW Session after version_unsupported is exactly what 3.4 prescribes",
     find: "                                 && retryIdOf(x) === key && seenBy(x) === who));",
     to: "                                 && retryIdOf(x) === key));" },
+
+  // What the log on disk is allowed to hold. The report was always redacted; the file was not.
+  { id: "privacy/api-body-kept", file: "record.mjs", tests: "tests/privacy.test.mjs",
+    kills: "a shopper body on an ordinary API call is not written to the log",
+    find: "  return !!record?.conversationRoute || record?.isAuthServer === true;", to: "  return true;" },
+  { id: "privacy/conversation-body-dropped", file: "record.mjs", tests: "tests/privacy.test.mjs",
+    kills: "a conversation body IS kept, because four rules read it",
+    find: "  return !!record?.conversationRoute || record?.isAuthServer === true;", to: "  return false;" },
+  { id: "privacy/body-drop-not-declared", file: "record.mjs", tests: "tests/privacy.test.mjs",
+    kills: "a shopper body on an ordinary API call is not written to the log",
+    find: "    record.bodyKept = bodyIsKept(record);", to: "    record.bodyKept = undefined;" },
+  { id: "privacy/jti-compares-text-again", file: "checks.mjs", tests: "tests/privacy.test.mjs",
+    kills: "session.jti-unique still tells two bodies apart when neither body was kept",
+    find: '        const bodyKey = r.bodySha256 ?? createHash("sha256").update(r.body ?? "").digest("hex");',
+    to: '        const bodyKey = r.body ?? "";' },
 ];
 
 // Imported for its MUTATIONS list by a test that owns the count in the README. Everything

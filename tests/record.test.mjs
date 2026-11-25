@@ -233,7 +233,9 @@ test("readBody truncates what it keeps and hashes what it got", async () => {
   const { EventEmitter } = await import("node:events");
   const { createHash } = await import("node:crypto");
   const req = new EventEmitter();
-  const record = {};
+  // A conversation route, because the text of a body is kept only where a rule reads it and the
+  // truncation behaviour this test is about can only be seen on a body that is kept at all.
+  const record = { conversationRoute: "create" };
   let done = false;
   readBody(req, record, 4, () => { done = true; });
 
@@ -242,11 +244,29 @@ test("readBody truncates what it keeps and hashes what it got", async () => {
   req.emit("end");
 
   assert.equal(done, true);
+  assert.equal(record.bodyKept, true);
   assert.equal(record.body, "abcd", "the kept body must stop at the cap");
   assert.equal(record.bodyTruncated, true);
   assert.equal(record.bodyBytes, 8);
   assert.equal(record.bodyComplete, true);
   assert.equal(record.bodySha256, createHash("sha256").update("abcdefgh").digest("hex"));
+});
+
+test("a body no rule reads is hashed and its length kept, and the text is not", async () => {
+  // The log is not the report. The report was always redacted; the file was a verbatim capture
+  // of a real shop's traffic, sitting on a disk for weeks.
+  const { readBody } = await import("../record.mjs");
+  const { EventEmitter } = await import("node:events");
+  const { createHash } = await import("node:crypto");
+  const req = new EventEmitter();
+  const record = { isResource: true };            // a listed destination, not a conversation route
+  readBody(req, record, 256, () => {});
+  req.emit("data", Buffer.from("jane@example.com"));
+  req.emit("end");
+  assert.equal(record.bodyKept, false, "and it says so, so an empty body and a dropped one differ");
+  assert.equal(record.body, "");
+  assert.equal(record.bodyBytes, 16);
+  assert.equal(record.bodySha256, createHash("sha256").update("jane@example.com").digest("hex"));
 });
 
 test("a listed API path reached with a method the document does not describe is not a web page", async () => {

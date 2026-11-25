@@ -305,6 +305,22 @@ export function recordOf(req, cfg, { at, body = null, bodyComplete = true } = {}
 // log as incomplete rather than being answered or dropped. The two halves disagree on purpose:
 // `body` stops at the cap so a report cannot be filled with somebody's upload, while the hash
 // covers every byte that arrived, so an oversize body is still identifiable.
+// Whether the TEXT of a body is kept in the log at all. The rules read a body in exactly three
+// places: a conversation route of 8.2, where 8.3's request id and 8.4 and 8.8's message live; a
+// token request at this Company's own authorization server, where 3.2's `grant_type` lives; and
+// the shape comparison in session.jti-unique, which only needs to know whether two bodies differ
+// and uses the hash for that. Everything else keeps its sha256 over every byte that arrived and
+// its length, and nothing more.
+//
+// This matters because the log is not the report. The report was always redacted; the file was a
+// verbatim capture of a real shop's traffic sitting on a disk for weeks, carts and addresses and
+// everything else that passes through a listed API. One function, so a rule that starts reading a
+// body the capture drops cannot silently abstain forever: the test beside this asserts the policy
+// against the places the rules actually read.
+export function bodyIsKept(record) {
+  return !!record?.conversationRoute || record?.isAuthServer === true;
+}
+
 export function readBody(req, record, maxBody, done) {
   const chunks = []; let bytes = 0; const hash = createHash("sha256");
   record.body = ""; record.bodyComplete = false;
@@ -314,10 +330,14 @@ export function readBody(req, record, maxBody, done) {
     else record.bodyTruncated = true;
   });
   req.on("end", () => {
-    record.body = Buffer.concat(chunks).toString("utf8");
     record.bodySha256 = hash.digest("hex");
     record.bodyBytes = bytes;
     record.bodyComplete = true;
+    // Decided AFTER the record was classified, which recordOf did before this ran, and recorded
+    // on the record so a reader of the log is never left wondering whether a body was empty or
+    // simply not kept.
+    record.bodyKept = bodyIsKept(record);
+    record.body = record.bodyKept ? Buffer.concat(chunks).toString("utf8") : "";
     done();
   });
   // aborted, reset, or the socket closed before `end`: the record stays incomplete and says

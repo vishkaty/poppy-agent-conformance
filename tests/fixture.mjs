@@ -118,6 +118,8 @@ export async function request(keys, over = {}) {
     // the "does not accuse" cases passed for free.
     ...(over.bodyComplete !== undefined ? { bodyComplete: over.bodyComplete } : {}),
     ...(over.bodyTruncated !== undefined ? { bodyTruncated: over.bodyTruncated } : {}),
+    ...(over.bodyKept !== undefined ? { bodyKept: over.bodyKept } : {}),
+    ...(over.bodySha256 !== undefined ? { bodySha256: over.bodySha256 } : {}),
     ...(over.unsafeTarget !== undefined ? { unsafeTarget: over.unsafeTarget } : {}),
     ...(over.refused !== undefined ? { refused: over.refused } : {}),
     // `seq` is how the report and the history rules order a log, and it was the one field a test

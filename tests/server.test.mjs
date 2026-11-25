@@ -67,14 +67,32 @@ test("a POST with an empty body records an empty string", async () => {
   });
 });
 
-test("a POST body is captured verbatim and marked complete", async () => {
-  await withGrader(async (g, port) => {
-    const body = JSON.stringify({ id: "req_1", message: { text: "hello" } });
-    await fetch(`${base(port)}/v1/orders`, { method: "POST", body, headers: { "content-type": "application/json" } });
-    const r = g.records.at(-1);
-    assert.equal(r.body, body);
-    assert.equal(r.bodyComplete, true);
-  });
+test("a conversation body is captured verbatim, and an API body is only hashed", async () => {
+  // Capture parity with the recorder: both paths share record.mjs, so the policy about which
+  // bodies are kept has to hold here too, or the hosted Company and a recorded run would judge
+  // the same traffic differently.
+  //
+  // withCompany rather than withGrader, because withGrader's static document names its endpoints
+  // without a port while the listener gets one, so nothing in it classifies as a conversation
+  // route at all and the kept half of this test would prove nothing.
+  const { createHash } = await import("node:crypto");
+  await withCompany(async (g, port) => {
+    const body = JSON.stringify({ id: "req_1", message: { author: { type: "human" }, text: "hello" } });
+    await fetch(`${base(port)}/poppy/conversations`, { method: "POST", body, headers: { "content-type": "application/json" } });
+    const convo = g.records.at(-1);
+    assert.equal(convo.conversationRoute, "create", "the fixture must really be a conversation route");
+    assert.equal(convo.body, body, "8.3 and 8.4 are judged on this body");
+    assert.equal(convo.bodyKept, true);
+    assert.equal(convo.bodyComplete, true);
+
+    const secret = JSON.stringify({ email: "jane@example.com" });
+    await fetch(`${base(port)}/poppy/orders`, { method: "POST", body: secret, headers: { "content-type": "application/json" } });
+    const api = g.records.at(-1);
+    assert.equal(api.bodyKept, false, "no rule reads an API body, so the log must not hold it");
+    assert.equal(api.body, "");
+    assert.equal(api.bodySha256, createHash("sha256").update(secret).digest("hex"));
+    assert.equal(api.bodyComplete, true);
+  }, { operations: [{ method: "GET", path: "/poppy/orders" }, { method: "POST", path: "/poppy/orders" }] });
 });
 
 test("at is the arrival time, not the time the response finished", async () => {

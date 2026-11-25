@@ -375,7 +375,12 @@ export const CHECKS = [
         const j = jwt.payload.jti;
         if (j === undefined || j === "") continue;    // claims-present reports those
         if (r.bodyComplete === false) { incomplete++; continue; }
-        const shape = `${r.method} ${htuOf(r) ?? r.path} ${r.body ?? ""}`;
+        // The hash rather than the text, for two reasons. The log no longer keeps the text of a
+        // body no rule reads, so comparing text would make every such body look identical and mask
+        // a real replay. And the hash covers every byte that ARRIVED, where the text stops at the
+        // cap, so two bodies identical in their first 256 KB are no longer mistaken for one.
+        const bodyKey = r.bodySha256 ?? createHash("sha256").update(r.body ?? "").digest("hex");
+        const shape = `${r.method} ${htuOf(r) ?? r.path} ${bodyKey}`;
         const k = agentKey(jwt, j);
         const e = byJti.get(k) ?? byJti.set(k, { jti: j, shapes: new Set(), requests: [] }).get(k);
         e.shapes.add(shape); e.requests.push(r);
