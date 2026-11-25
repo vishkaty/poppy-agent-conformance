@@ -4,3 +4,5 @@ snapshots/
 .killtest-backup.json
 CLAUDE.local.md
 .check/
+.killtest.lock
+.killtest-backup.json

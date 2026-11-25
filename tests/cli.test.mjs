@@ -188,3 +188,32 @@ test("record it yourself: a conforming agent through the recorder, judged from t
   assert.deepEqual(failed, [], `a conforming agent failed through the recorder: ${failed.join(", ")}`);
   assert.ok(report.selfRecorded?.includes("Self-recorded"), "the report must label itself");
 });
+
+// The operator half of attribution: asking for grouping on the command line and getting one page
+// per claimed client_id under agents/, plus an index that carries the claim caveat and the count
+// of requests attributed to nobody. Without this the grouping exists only as a library call.
+test("judge --attribution by-issuer writes one page per claimed client_id and an index", async () => {
+  const { mkdtempSync, writeFileSync, readFileSync, existsSync, readdirSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { execFileSync } = await import("node:child_process");
+  const f = await import("./fixture.mjs");
+  const dir = mkdtempSync(join(tmpdir(), "poppy-attr-"));
+  const keys = await f.agentKeys(), kb = await f.agentKeys();
+  const B = "https://agent-b.example/agent.json";
+  const records = [...(await f.conformingLog(keys)), await f.request(kb, { clientId: B, sesTyp: "JWT", seq: 50 })];
+  const header = { kind: "poppy-recorded-run", version: 1, origin: "https://shop.example",
+                   discovery: { protocol_version: "1.0", organization: { domain: "shop.example" },
+                                auth: { issuer: "https://shop.example/poppy", disabled: true } } };
+  const log = join(dir, "run.jsonl");
+  writeFileSync(log, [header, ...records].map(r => JSON.stringify(r)).join("\n") + "\n");
+  const out = execFileSync("node", ["record-cli.mjs", "judge", log, "--attribution", "by-issuer"], { encoding: "utf8" });
+  assert.ok(existsSync(join(dir, "agents")), "an agents/ directory is written");
+  const pages = readdirSync(join(dir, "agents")).filter(n => n.endsWith(".html"));
+  assert.equal(pages.length, 2, `one page per claimed client_id, got ${pages}`);
+  const index = readFileSync(join(dir, "report.html"), "utf8");
+  assert.match(index, /verified nothing about that claim/, "the index carries the claim caveat");
+  assert.match(index, /attributed to nobody/, "and the unattributed count");
+  assert.doesNotMatch(index, /your agent failed/, "and no aggregate verdict across agents");
+  assert.match(out, /2 claimed client_id/, `the command says what it wrote: ${out}`);
+});

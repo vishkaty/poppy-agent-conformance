@@ -2,6 +2,7 @@
 //
 //   node record-cli.mjs config.json              record: a proxy in front of your own Company
 //   node record-cli.mjs judge run.jsonl [b.jsonl]   judge: rebuild the report from the file
+//   ... judge run.jsonl --attribution by-issuer   one report per claimed client_id, and an index
 //
 // The point of the two commands being separate is that the second needs nothing: no network, no
 // config, not the process that recorded. A verdict you cannot produce again from the file is a
@@ -24,7 +25,7 @@
 // terminator those differ, and `htu` is compared against the former. Getting it wrong is the
 // likeliest way to make this report wrong about a conforming agent, so the recorder refuses to
 // start when nothing in your own document is on it.
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
 import { createRecorder, openRunFile, appendRecord, readRun, judge } from "./recorder.mjs";
@@ -129,17 +130,57 @@ async function record(configPath) {
   process.on("SIGTERM", stop);
 }
 
-function judgeFiles(args) {
-  const outIndex = args.indexOf("--out");
-  const out = outIndex === -1 ? null : args[outIndex + 1];
-  const files = (outIndex === -1 ? args : [...args.slice(0, outIndex), ...args.slice(outIndex + 2)]);
+// One option taken out of the argument list, with its value.
+function takeOption(args, name) {
+  const i = args.indexOf(name);
+  if (i === -1) return { value: null, rest: args };
+  return { value: args[i + 1] ?? null, rest: [...args.slice(0, i), ...args.slice(i + 2)] };
+}
+
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+// The index for a run judged per claimed client_id: one line per group with its page, the claim
+// caveat once, and the count of requests attributed to nobody. No verdict across groups appears
+// here, because a total across agents is a verdict about nobody.
+function renderIndex(out) {
+  const rows = out.agents.map(g =>
+    `<li><a href="agents/${g.tag}.html"><code>${esc(g.iss)}</code></a>: ${g.requests} request(s); `
+    + `${g.report.summary.fail} failed, ${g.report.summary.pass} passed, ${g.report.summary.unreached} not reached, `
+    + `${g.report.summary.unjudged} not judged by the grader</li>`).join("\n");
+  return `<!doctype html><meta charset="utf-8"><title>Recorded run, by claimed client_id</title>
+<style>body{font:15px/1.5 system-ui,sans-serif;max-width:60rem;margin:2rem auto;padding:0 1rem}code{font-size:.9em}</style>
+<h1>Recorded run, judged by claimed client_id</h1>
+<p>${out.agents.length} claimed client_id(s). ${esc(out.unattributed.sentence)}</p>
+<p>${esc(out.agents[0]?.claim ?? "Grouped by the client_id each Session JWT claimed. This recorder verified nothing about that claim.")}</p>
+<ul>${rows}</ul>
+<p>Each page is the same report this grader writes for a single agent, over that client_id's records alone. Nothing here totals across them.</p>
+`;
+}
+
+function judgeFiles(args0) {
+  const { value: out, rest: args1 } = takeOption(args0, "--out");
+  const { value: attribution, rest: files } = takeOption(args1, "--attribution");
+  if (attribution && attribution !== "by-issuer" && attribution !== "single-agent")
+    throw new Error(`--attribution takes by-issuer or single-agent, not ${attribution}`);
   if (!files.length) throw new Error("judge needs at least one recorded run file");
   const runs = files.map(f => readRun(resolve(f)));
-  const { report } = judge(runs, { graderCommit: graderCommit() });
-  const written = writeReport(out ? resolve(out) : dirname(resolve(files[0])), report, "report");
-  console.log(report.topSentence);
-  if (report.selfRecorded) console.log(report.selfRecorded);
-  console.log(`report ${written.htmlPath}`);
+  const dir = out ? resolve(out) : dirname(resolve(files[0]));
+  const judged = judge(runs, { graderCommit: graderCommit(), attribution: attribution ?? "single-agent" });
+  if (!judged.agents) {
+    const { report } = judged;
+    const written = writeReport(dir, report, "report");
+    console.log(report.topSentence);
+    if (report.selfRecorded) console.log(report.selfRecorded);
+    console.log(`report ${written.htmlPath}`);
+    return;
+  }
+  // By claimed client_id: one page per group under agents/, and an index in place of the report.
+  mkdirSync(join(dir, "agents"), { recursive: true });
+  for (const g of judged.agents) writeReport(join(dir, "agents"), g.report, g.tag);
+  writeFileSync(join(dir, "report.json"), JSON.stringify({ index: judged.index, agents: judged.agents.map(g => ({ iss: g.iss, tag: g.tag, requests: g.requests, claim: g.claim })) }, null, 1));
+  writeFileSync(join(dir, "report.html"), renderIndex(judged));
+  console.log(`${judged.agents.length} claimed client_id(s), one page each under ${join(dir, "agents")}; ${judged.unattributed.sentence}`);
+  console.log(`index ${join(dir, "report.html")}`);
 }
 
 const [first, ...rest] = process.argv.slice(2);

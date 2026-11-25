@@ -726,6 +726,23 @@ const picked = process.argv[2]
 if (RUNNING && picked.length === 0) { console.error(`no mutation matches ${process.argv[2]}`); process.exit(2); }
 
 const BACKUP = join(ROOT, ".killtest-backup.json");
+// A lock while a run is in progress, so a second actor in the same tree fails loudly instead of
+// corrupting results silently. A review agent once ran this concurrently with an edit and a
+// suite run in the same tree: the suite saw a mutated file, and the file was restored under the
+// editor a minute later. `npm test` refuses to start while the lock exists (see `pretest`), and
+// this refuses to start if a live run holds it.
+const LOCK = join(ROOT, ".killtest.lock");
+if (RUNNING) {
+  if (existsSync(LOCK)) {
+    const held = readFileSync(LOCK, "utf8").trim();
+    let alive = false;
+    try { process.kill(Number(held), 0); alive = true; } catch { /* no such process */ }
+    if (alive) { console.error(`a kill test (pid ${held}) holds ${LOCK}; refusing to run a second one in this tree`); process.exit(4); }
+    console.log(`stale ${LOCK} from pid ${held}, which is gone; taking it over`);
+  }
+  writeFileSync(LOCK, String(process.pid));
+  process.on("exit", () => { try { rmSync(LOCK, { force: true }); } catch { /* best effort */ } });
+}
 if (!RUNNING) { /* imported: stop here, run nothing, touch no file */ } else {
 
 // A mutation left behind by a crashed run would make every later number a statement about

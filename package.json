@@ -13,7 +13,8 @@
     "start": "node --experimental-strip-types grade.mjs",
     "killtest": "node tools/killtest.mjs",
     "spec-status": "node tools/spec-status.mjs",
-    "check": "sh tools/check.sh"
+    "check": "sh tools/check.sh",
+    "pretest": "sh -c '[ ! -f .killtest.lock ] || { echo \"a kill test holds .killtest.lock; refusing to test under it\"; exit 1; }'"
   },
   "dependencies": {
     "jose": "^6.2.12"
