@@ -35,7 +35,11 @@ The suite refuses a rule that skips any step, on purpose.
 ## Working rules
 
 - Node 22.6 or later, for `--experimental-strip-types` on the authors reference code.
-- Run `npm run killtest` in a worktree of its own; it edits and restores files in place.
+- Run `npm run killtest` in a worktree of its own, never the tree being edited: it edits and
+  restores source files in place, and a suite run in the same tree meanwhile sees a mutated file.
+  It holds `.killtest.lock` while running, and `npm test` refuses to start under that lock. If you
+  delegate verification to a tool or an agent, say in so many words that it may not run the kill
+  test in a shared tree.
 - Multi file scripted edits are applied as one patch, then `git diff --stat` is compared with the
   intended file list. A script that crashed halfway once wrote two files of four.
 - Read an exit code from the command itself, written to a file; never through a pipe or a

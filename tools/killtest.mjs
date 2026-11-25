@@ -700,6 +700,20 @@ export const MUTATIONS = [
   { id: "versions/pair-unpartitioned", file: "checks.mjs", tests: "tests/versions.test.mjs",
     kills: "gradePair honours the partition, so 0.x traffic is not compared across Companies",
     find: "  const a = inScope(logA, ctxA), b = inScope(logB, ctxB);", to: "  const a = logA ?? [], b = logB ?? [];" },
+
+  // Attribution by claimed client_id. Each of these makes one agent answerable for another.
+  { id: "attribution/pooled", file: "recorder.mjs", tests: "tests/attribution.test.mjs",
+    kills: "an agent's report is a function of its own records alone",
+    find: "    const own = companies.map(c => ({ ...c, log: c.log.filter(r => issOf(r) === iss) }));",
+    to: "    const own = companies.map(c => ({ ...c }));" },
+  { id: "attribution/bare-request-charged", file: "recorder.mjs", tests: "tests/attribution.test.mjs",
+    kills: "a request with no decodable Session header belongs to no group and is counted",
+    find: '    return typeof iss === "string" && iss ? iss : null;',
+    to: '    return typeof iss === "string" && iss ? iss : "nobody";' },
+  { id: "attribution/default-groups", file: "recorder.mjs", tests: "tests/attribution.test.mjs",
+    kills: "single-agent mode is byte for byte what judge returned before",
+    find: '  if (attribution !== "by-issuer") return { run, report: buildRecordedReport(run) };',
+    to: '  if (false) return { run, report: buildRecordedReport(run) };' },
 ];
 
 // Imported for its MUTATIONS list by a test that owns the count in the README. Everything

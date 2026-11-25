@@ -26,6 +26,8 @@ import { appendFileSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import { recordOf, readBody, isUnsafeTarget } from "./record.mjs";
 import { contextOf } from "./discovery.mjs";
 import { buildReport } from "./report.mjs";
+import { decodeJwt } from "./checks.mjs";
+import { createHash } from "node:crypto";
 import { validateConfig } from "./server.mjs";
 
 // Hop by hop headers belong to one connection and are the proxy's own business (RFC 9110 7.6.1).
@@ -240,7 +242,7 @@ export function readRun(path) {
 // Two identifiers are two Companies, which is what the pairwise rules need. Three is refused
 // rather than quietly reduced to two, because a report that silently dropped a third would be a
 // statement about a Company nobody chose.
-export function judge(runs, { graderCommit = "unknown", token = "" } = {}) {
+export function judge(runs, { graderCommit = "unknown", token = "", attribution = "single-agent" } = {}) {
   if (!Array.isArray(runs) || runs.length === 0) throw new Error("no recorded runs to judge");
   const byIdentifier = new Map();
   for (const run of runs) {
@@ -264,7 +266,53 @@ export function judge(runs, { graderCommit = "unknown", token = "" } = {}) {
   // still reads as one timeline.
   for (const c of companies) c.log.sort((x, y) => (x.at ?? 0) - (y.at ?? 0));
   const run = { companies, token, graderCommit, mode: "recorded" };
-  return { run, report: buildRecordedReport(run) };
+  if (attribution !== "by-issuer") return { run, report: buildRecordedReport(run) };
+
+  // By the client_id each Session JWT claimed. In front of a real store the log holds many agents
+  // at once, and a run wide verdict says "your agent failed N" about all of them together; the
+  // hosted rig avoids that with an exclusive lease, and a recorder has no lease. Each group gets
+  // the existing report over its own records only, so an agent's verdicts are a function of its
+  // own records alone, which tests/attribution.test.mjs holds over seeded shuffles of a crowd.
+  //
+  // A request carrying no decodable Session header belongs to no group: there is no client_id to
+  // attribute it by, and charging it to whoever else was in the log is the wrong FAIL the lease
+  // design refused to make. It is counted, and cited by no verdict. There is no aggregate across
+  // groups, because a total across agents is a verdict about nobody.
+  //
+  // The recorder verifies nothing about the claim. A FAIL in a group is about whoever signed
+  // those requests; it is not evidence that the operator of that client_id sent them, and every
+  // group says so in its own words. No vendor is named by this instrument; the claimed client_id
+  // is the operator's own observation, shown to the operator.
+  const issOf = (r) => {
+    const iss = decodeJwt(r.headers?.["poppy-session"])?.payload?.iss;
+    return typeof iss === "string" && iss ? iss : null;
+  };
+  const issuers = new Set();
+  let unattributedCount = 0;
+  for (const c of companies) for (const r of c.log) { const i = issOf(r); if (i) issuers.add(i); else unattributedCount++; }
+  const agents = [...issuers].sort().map(iss => {
+    const own = companies.map(c => ({ ...c, log: c.log.filter(r => issOf(r) === iss) }));
+    const groupRun = { companies: own, token, graderCommit, mode: "recorded" };
+    return {
+      iss,
+      tag: createHash("sha256").update(iss).digest("hex").slice(0, 16),
+      requests: own.reduce((n, c) => n + c.log.length, 0),
+      claim: "Grouped by the client_id each Session JWT claimed. This recorder verified nothing about that claim."
+           + " A FAIL here is about whoever signed these requests; it is not evidence that the operator of this"
+           + " client_id sent them.",
+      report: buildRecordedReport(groupRun),
+    };
+  });
+  const unattributed = {
+    count: unattributedCount,
+    sentence: unattributedCount
+      ? `${unattributedCount} request(s) carried no decodable Session header and are attributed to nobody.`
+        + " Whether a bare request to a destination is a breach is judged in the hosted rig and in a single"
+        + " agent recording, where the sender is known; here it is counted."
+      : "Every request carried a decodable Session header.",
+  };
+  return { run, agents, unattributed,
+           index: { agents: agents.map(g => ({ iss: g.iss, tag: g.tag, requests: g.requests })), unattributed } };
 }
 
 // A recorded run has whatever the builder recorded, one Company or two, and buildReport takes it
