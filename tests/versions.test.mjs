@@ -189,3 +189,35 @@ test("only the two rules about `Poppy-Version` itself may read a version this Co
   const flagged = CHECKS.filter(c => c.appliesTo === "every version").map(c => c.id).sort();
   assert.deepEqual(flagged, ["version.constant", "version.sent"]);
 });
+
+test("the report counts what it did not judge, and names the versions this Company serves", async () => {
+  // A partition that drops records silently is worse than one that judges them wrongly, because
+  // the reader cannot see it happen: the traffic was recorded, it was deliberately not graded,
+  // and a report that never mentions it reads as though it had never arrived.
+  const { judge } = await import("../recorder.mjs");
+  const keys = await f.agentKeys();
+  const discovery = { protocol_version: "1.0",
+                      supported_versions: { "0.4": "https://shop.example/poppy/0.4.json" },
+                      organization: { domain: "shop.example" },
+                      auth: { issuer: "https://shop.example/poppy", disabled: true } };
+  const run = {
+    header: { origin: "https://shop.example", discovery },
+    records: [
+      await f.request(keys, { version: "1.0", sub: "user-one", seq: 1 }),
+      await f.request(keys, { version: "0.4", sub: "user-one", seq: 2 }),
+      await f.request(keys, { version: "0.4", sub: "user-one", seq: 3, path: "/poppy/orders/1" }),
+    ],
+  };
+  const { report } = judge([run], { graderCommit: "test" });
+  assert.equal(report.summary.notJudgedForVersion, 2,
+    "two requests declared 0.4, which this Company serves under a text this grader does not hold");
+  assert.match(report.topSentence, /not judged/,
+    `the top sentence must say so: ${report.topSentence}`);
+  assert.match(report.topSentence, /0\.4/, "and name the version those requests declared");
+  // And the hard invariant: nothing out of scope may ever be cited as deciding a verdict.
+  const outOfScope = new Set([run.records[1], run.records[2]]);
+  for (const rule of report.rules)
+    for (const c of rule.perCompany)
+      for (const cited of c.decidedBy ?? [])
+        assert.ok(!outOfScope.has(cited), `${rule.id} cited a request it must not have read`);
+});

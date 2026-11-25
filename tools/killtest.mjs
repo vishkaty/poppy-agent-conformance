@@ -658,6 +658,15 @@ export const MUTATIONS = [
     kills: "a breach under a version this Company serves beside 1.0 is judged by NO rule of 1.0",
     find: '  return majorOf(match) === 1 ? "judged" : "out-of-scope";',
     to: '  return "judged";' },
+
+  // A partition that drops records silently is worse than one that judges them wrongly, because
+  // the reader cannot see it happen. These two hide it.
+  { id: "versions/not-judged-uncounted", file: "report.mjs", tests: "tests/versions.test.mjs",
+    kills: "the report counts what it did not judge, and names the versions this Company serves",
+    find: "    notJudgedForVersion: outOfScope.length,", to: "    notJudgedForVersion: 0," },
+  { id: "versions/not-judged-unsaid", file: "report.mjs", tests: "tests/versions.test.mjs",
+    kills: "the report counts what it did not judge, and names the versions this Company serves",
+    find: "      + (summary.notJudgedForVersion", to: "      + (false && summary.notJudgedForVersion" },
 ];
 
 // Imported for its MUTATIONS list by a test that owns the count in the README. Everything

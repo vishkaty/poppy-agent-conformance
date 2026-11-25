@@ -10,7 +10,7 @@ import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { CHECKS, PAIRWISE, grade, gradePair, decodeJwt, WINDOW_SECONDS, SKEW_SECONDS } from "./checks.mjs";
+import { CHECKS, PAIRWISE, grade, gradePair, decodeJwt, versionScopeOf, WINDOW_SECONDS, SKEW_SECONDS } from "./checks.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PROV = JSON.parse(readFileSync(join(HERE, "spec/PROVENANCE.json"), "utf8"));
@@ -183,6 +183,29 @@ export function buildReport(run) {
   // One index across both Companies, in time order, so an ordinal identifies a request.
   const all = both.flatMap(c => c.log.map(r => ({ r, origin: c.ctx.identifier })))
     .sort((x, y) => (x.r.at ?? 0) - (y.r.at ?? 0));
+  // What was recorded and deliberately NOT judged, and why. 3.4 lets a Company serve several
+  // versions at once, and this grader holds published 1.0 alone, so a request declaring a version
+  // this Company serves under another text is read by no rule. Dropping those silently would be
+  // worse than judging them wrongly: the reader could not see it happen, and a report that never
+  // mentions the traffic reads as though it never arrived.
+  const scopeOf = new Map();
+  for (const c of both)
+    for (const r of c.log) scopeOf.set(r, versionScopeOf(r, c.ctx));
+  const outOfScope = [...scopeOf].filter(([, s]) => s === "out-of-scope").map(([r]) => r);
+  // The absent header is its own case and reads badly in a list: a Company serving a version
+  // older than 0.4, where `Poppy-Version` was introduced, cannot tell a conforming agent of that
+  // version from a 1.0 agent that omitted it, so "declared 0.4, none" would misdescribe it.
+  const declaredSet = new Set(outOfScope.map(r => r.headers?.["poppy-version"]));
+  const declaredVersions = [...declaredSet].filter(v => typeof v === "string" && v !== "").sort();
+  const someDeclaredNothing = outOfScope.some(r => {
+    const v = r.headers?.["poppy-version"];
+    return typeof v !== "string" || v === "";
+  });
+  const declaredPhrase = [declaredVersions.length ? declaredVersions.join(", ") : null,
+                          someDeclaredNothing ? "no version at all" : null]
+    .filter(Boolean).join(", or ");
+  const servedVersions = [...new Set(both.flatMap(c => c.ctx?.servedVersions ?? []))].sort();
+
   const ordinalOf = new Map();
   const requests = all.map(({ r }, i) => { ordinalOf.set(r, i + 1); return redactRecord(r, i + 1, runToken); });
 
@@ -292,6 +315,10 @@ export function buildReport(run) {
     // lease, which no amount of attribution can prevent and which they have to be told,
     // because a bare request from elsewhere is a failure on a rule they did not break.
     sources: new Set(all.map(({ r }) => r.remoteAddress).filter(Boolean)).size,
+    // Recorded, examined by no rule, because the version it declared is one this Company serves
+    // under a text this grader does not hold. Never folded into failed, passed or not reached:
+    // those are verdicts and this is the absence of one.
+    notJudgedForVersion: outOfScope.length,
   };
 
   // Counts, never adjectives, and never the word conform.
@@ -301,7 +328,15 @@ export function buildReport(run) {
       + `passed ${summary.pass}, did not reach ${summary.unreached}, and ${summary.unjudged} `
       + `could not be judged by the grader, on ${summary.requests} requests recorded at `
       + `${names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}` : names[0] ?? "this Company"}`
-      + (run.started && run.ended ? ` between ${iso(run.started)} and ${iso(run.ended)}.` : ".");
+      + (run.started && run.ended ? ` between ${iso(run.started)} and ${iso(run.ended)}.` : ".")
+      // Said in the first sentence rather than a footnote, because a reader who does not see it
+      // there will read the counts above as covering everything that arrived.
+      + (summary.notJudgedForVersion
+          ? ` A further ${summary.notJudgedForVersion} request(s) were recorded and not judged:`
+            + ` they declared ${declaredPhrase}, and this Company serves`
+            + ` ${servedVersions.join(", ")}, so they were handled under a version whose text`
+            + " this grader does not hold. They are counted here and examined by no rule."
+          : "");
 
   const issuers = [...new Set(all.map(({ r }) => decodeJwt(r.headers?.["poppy-session"])?.payload?.iss).filter(Boolean))];
 
