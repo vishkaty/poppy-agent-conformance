@@ -68,6 +68,49 @@ export function discoveryFor(origin, { name = "Grader Shop", withExtensions = fa
 //
 // One implementation, used by the recorder, the rig and the report, so the identifier a
 // verdict is judged against is the identifier the Company publishes.
+// 3.4: "Two versions are compatible when they have the same major version and, before 1.0, the
+// same minor version." Both sides are `major.minor`: 3.1 and 3.4 say so and the authors' own
+// schema constrains `protocol_version` and every key of `supported_versions` to exactly that
+// shape, so anything of another shape is not a version and is compatible with nothing. The
+// "before 1.0" clause is read on the major, because once the majors agree either both sides are
+// 0.x or neither is. The rule used to compare majors alone, which made 0.3 and 0.4 compatible
+// with each other and let a 0.3 agent pass at a Company that serves only 0.4.
+const VERSION = /^(\d+)\.(\d+)$/;
+export function compatible(a, b) {
+  const x = VERSION.exec(String(a ?? "")), y = VERSION.exec(String(b ?? ""));
+  if (!x || !y) return false;
+  if (Number(x[1]) !== Number(y[1])) return false;
+  return Number(x[1]) === 0 ? Number(x[2]) === Number(y[2]) : true;
+}
+export const isVersion = (v) => VERSION.test(String(v ?? ""));
+
+// One context for the recorder, the hosted Company and the rig, so a rule is told the same
+// thing wherever it runs. The three had drifted: the rig's version carried no protocolVersion
+// at all, so every version rule there judged against a default nobody had stated.
+export function contextOf(discovery) {
+  const d = discovery ?? {};
+  // 3.4: a Company "can serve several protocol versions at once", its `poppy.json` being the
+  // document for the version it prefers while `supported_versions` maps each other version it
+  // serves to that version's document. A rule that reads only the preferred one faults a
+  // conforming agent that chose a version this very Company publishes.
+  const served = [];
+  if (isVersion(d.protocol_version)) served.push(String(d.protocol_version));
+  for (const v of Object.keys(d.supported_versions ?? {}))
+    if (isVersion(v) && !served.includes(v)) served.push(v);
+  return {
+    identifier: identifierOf(d),
+    domain: d.organization?.domain,
+    protocolVersion: d.protocol_version,
+    servedVersions: served,
+    // 3.2's prohibition on starting a sign-in binds only at a Company that offers none, so a
+    // rule about it has to be told rather than guess.
+    authDisabled: d.auth?.disabled === true,
+    // 3.4 judges a declared extension against the chosen document, so the rule is given the
+    // list rather than left to guess that every name is unlisted.
+    extensions: Object.keys(d.extensions ?? {}),
+  };
+}
+
 export function identifierOf(discovery) {
   const issuer = discovery?.auth?.issuer;
   if (typeof issuer === "string" && issuer) return issuer;

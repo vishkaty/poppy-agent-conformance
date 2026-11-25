@@ -622,6 +622,23 @@ export const MUTATIONS = [
     kills: "a FAIL names only the requests that decided it, not every agent in the log",
     find: "[...new Set(bad.map(({ d }) => String(d.header?.alg)))].slice(0, 3), bad.map(({ r }) => r))",
     to: "[...new Set(bad.map(({ d }) => String(d.header?.alg)))].slice(0, 3), pairs.map(({ r }) => r))" },
+
+  // Versions. 3.4 lets a Company serve several at once, and the rule read only the one it
+  // prefers, with a major only comparison. Each of these restores one half of that.
+  { id: "versions/minor-ignored-before-1.0", file: "discovery.mjs", tests: "tests/versions.test.mjs",
+    kills: "3.4 compatibility is the same major, and before 1.0 the same minor",
+    find: "  return Number(x[1]) === 0 ? Number(x[2]) === Number(y[2]) : true;", to: "  return true;" },
+  { id: "versions/served-set-is-preferred-only", file: "discovery.mjs", tests: "tests/versions.test.mjs",
+    kills: "the served set is the preferred version plus every version listed beside it",
+    find: "    if (isVersion(v) && !served.includes(v)) served.push(v);", to: "" },
+  { id: "versions/unknown-assumed-1.0", file: "checks.mjs", tests: "tests/versions.test.mjs",
+    kills: "with no served version known, the rule abstains as OUR limit rather than assuming 1.0",
+    find: '        return SKIP("this grader was not told which protocol versions this Company serves, so it cannot say whether a declared version is compatible with one", "grader");',
+    to: '        served.push("1.0");' },
+  { id: "versions/judge-reads-stored-ctx", file: "recorder.mjs", tests: "tests/versions.test.mjs",
+    kills: "a log recorded before the served set existed judges exactly like one recorded after",
+    find: "const ctx = run.header?.discovery ? contextOf(run.header.discovery) : run.header?.ctx;",
+    to: "const ctx = run.header?.ctx;" },
 ];
 
 // Imported for its MUTATIONS list by a test that owns the count in the README. Everything

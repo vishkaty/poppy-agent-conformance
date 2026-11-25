@@ -11,6 +11,7 @@
 // validator runs. Not skipped when unavailable: a conformance claim that quietly opts out
 // of its own control is the vacuous pass this project exists to avoid.
 import { test } from "node:test";
+import { contextOf } from "../discovery.mjs";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
@@ -21,7 +22,11 @@ import { grade, gradePair } from "../checks.mjs";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ref = await import("../reference/jose.ts");
 
-const CTX_A = { identifier: "https://shop.example/poppy", domain: "shop.example" };
+// Derived from a document, by the function the recorder and the hosted Company both use, so the
+// control against the authors' own signing code is judged with the context production builds.
+const CTX_A = contextOf({ protocol_version: "1.0",
+                          organization: { domain: "shop.example" },
+                          auth: { issuer: "https://shop.example/poppy" } });
 const CTX_B = { identifier: "https://other-shop.example/poppy", domain: "other-shop.example" };
 const CLIENT_ID = "https://agent.example/agent.json";
 

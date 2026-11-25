@@ -14,6 +14,7 @@
 import { createGrader } from "./server.mjs";
 import { buildReport, renderHtml } from "./report.mjs";
 import { CHECKS, PAIRWISE } from "./checks.mjs";
+import { contextOf } from "./discovery.mjs";
 import { randomBytes, createHash } from "node:crypto";
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -83,13 +84,6 @@ const realNow = () => Math.floor(Date.now() / 1000);
 // configuration behind it. The grader judges htu and aud against the configured origin, so
 // taking the canary's expectations from the published document makes a disagreement between
 // the two visible instead of self-confirming.
-function ctxOf(discovery) {
-  return { identifier: discovery?.auth?.issuer, domain: discovery?.organization?.domain,
-           // 3.2's prohibition on starting a sign-in binds only where a Company offers none, so
-           // the rule about it is told rather than left to guess.
-           authDisabled: discovery?.auth?.disabled === true,
-           extensions: Object.keys(discovery?.extensions ?? {}) };
-}
 const publicOriginOf = d => { try { return new URL(d.auth.issuer).origin; } catch { return null; } };
 
 // A loopback origin and a public one are the same request by construction, so the public leg
@@ -120,7 +114,7 @@ async function driveCanary(graders, ports, collector, { publicBase, module: mod,
   for (let i = 0; i < graders.length; i++) {
     const d = graders[i].config.discovery;
     const pub = publicOriginOf(d);
-    const ctx = ctxOf(d);
+    const ctx = contextOf(d);
     const sendBase = `http://127.0.0.1:${ports[i]}`;
 
     // One identity per Company, which is what a correct agent does: its own User ID and its
@@ -301,7 +295,7 @@ export function createRig(cfg = {}) {
 
   function sliceOf(run) {
     return graders.map((g, i) => ({
-      ctx: ctxOf(g.config.discovery),
+      ctx: contextOf(g.config.discovery),
       log: g.records.filter(r => r.seq > run.marks[i]),
     }));
   }
@@ -482,7 +476,7 @@ export function createRig(cfg = {}) {
 
     // 2. Does our own traffic pass every rule the canary is built to exercise?
     const { grade, gradePair } = await import("./checks.mjs");
-    const ctxA = ctxOf(graders[0].config.discovery), ctxB = ctxOf(graders[1].config.discovery);
+    const ctxA = contextOf(graders[0].config.discovery), ctxB = contextOf(graders[1].config.discovery);
     const verdicts = new Map();
     for (const v of grade(logs[0], ctxA)) verdicts.set(v.id, v);
     for (const v of grade(logs[1], ctxB)) {

@@ -24,6 +24,7 @@
 import { createServer, request as upstreamRequest } from "node:http";
 import { appendFileSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import { recordOf, readBody, isUnsafeTarget } from "./record.mjs";
+import { contextOf } from "./discovery.mjs";
 import { buildReport } from "./report.mjs";
 import { validateConfig } from "./server.mjs";
 
@@ -243,7 +244,12 @@ export function judge(runs, { graderCommit = "unknown", token = "" } = {}) {
   if (!Array.isArray(runs) || runs.length === 0) throw new Error("no recorded runs to judge");
   const byIdentifier = new Map();
   for (const run of runs) {
-    const ctx = run.header?.ctx;
+    // Rebuilt from the Company's own document in the header rather than taken from the context
+    // stored beside it, so a log recorded before a context field existed judges exactly like one
+    // recorded after. The served version set arrived that way: without this, every run captured
+    // earlier would abstain on every version rule. The document is in the log, so judge still
+    // needs no network and no configuration.
+    const ctx = run.header?.discovery ? contextOf(run.header.discovery) : run.header?.ctx;
     if (!ctx?.identifier) throw new Error("a recorded run has no Company identifier in its header");
     const got = byIdentifier.get(ctx.identifier);
     if (got) got.log.push(...run.records);

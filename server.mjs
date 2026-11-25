@@ -11,9 +11,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { recordOf, classify, pathOf, allowedMethodsFor, conversationRouteOf, readBody, isUnsafeTarget } from "./record.mjs";
 import { createConversations } from "./conversations.mjs";
-import { resourceMetadataFor, authServerMetadataFor, authServerMetadataPath, discoveryFor,
-         openapiFor, operationsToTemplates, DEFAULT_OPERATIONS, identifierOf,
-         authServerEndpointsFor } from "./discovery.mjs";
+import { resourceMetadataFor, authServerMetadataFor, authServerMetadataPath, discoveryFor, openapiFor, operationsToTemplates, DEFAULT_OPERATIONS, identifierOf, authServerEndpointsFor, contextOf } from "./discovery.mjs";
 import { enforce, tokenChallenge } from "./enforce.mjs";
 import { createIssuerKeys } from "./issuer-keys.mjs";
 
@@ -226,17 +224,6 @@ export function createGrader(cfg) {
 
   // What this Company IS, as the checks read it: its own published document decides, never a
   // Host header, for the reason record.mjs gives.
-  function contextOf(cfg) {
-    const d = cfg.discovery ?? {};
-    return { identifier: identifierOf(d), domain: d.organization?.domain,
-             protocolVersion: d.protocol_version,
-             // 3.2's prohibition on starting a sign-in binds only at a Company that offers none,
-             // so a rule about it has to be told rather than guess.
-             authDisabled: d.auth?.disabled === true,
-             // 3.4 judges a declared extension against the chosen document, so the rule is given
-             // the list rather than left to guess that every name is unlisted.
-             extensions: Object.keys(d.extensions ?? {}) };
-  }
 
   // Every response goes through here, so a record always says what the agent was told. The
   // report shows it, and a test asserts the record's response matches what enforcement
@@ -389,7 +376,7 @@ export function createGrader(cfg) {
       // answering with the body unread resets the client mid upload, leaves bodyComplete
       // false on the record, and makes the retry look like the reset upload that
       // session.jti-unique deliberately excuses.
-      const ctx = contextOf(config);
+      const ctx = contextOf(config.discovery);
       const refusal = config.enforce === false ? null : enforce(record, ctx);
       if (refusal) {
         record.rejection = { rule: refusal.rule, error: refusal.body.error };

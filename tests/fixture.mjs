@@ -11,7 +11,7 @@
 import { SignJWT, exportJWK, generateKeyPair, calculateJwkThumbprint } from "jose";
 import { randomUUID, createHash } from "node:crypto";
 import { isAuthServerEndpoint } from "../record.mjs";
-import { authServerEndpointsFor } from "../discovery.mjs";
+import { authServerEndpointsFor, contextOf } from "../discovery.mjs";
 
 // One derivation for every site in this fixture that builds a record by hand. Hand setting a
 // flag the recorder computes is how this fixture has handed rules a free pass five times; the
@@ -209,5 +209,13 @@ export async function conformingLog(keys, over = {}) {
 // The Company these fixtures describe, which sets `auth.disabled` exactly as the deployed one
 // does. A rule that asks whether sign-in is offered has to be told, and a ctx that left it out
 // made such a rule abstain here while the deployment judged it.
-export const ctx = { identifier: IDENTIFIER, domain: DOMAIN, authDisabled: true, extensions: [] };
+// Built by the SAME function the recorder, the hosted Company and the rig use, from a document
+// shaped like the one this fixture models. Hand listing the fields is how the fixture fell behind
+// the real paths before: the served version set was added and every test here kept a context that
+// did not have it, so the version rule abstained in tests while passing in production.
+export const ctx = contextOf({
+  protocol_version: "1.0",
+  organization: { domain: DOMAIN },
+  auth: { issuer: IDENTIFIER, disabled: true },
+});
 export const athOf = t => createHash("sha256").update(t).digest("base64url");

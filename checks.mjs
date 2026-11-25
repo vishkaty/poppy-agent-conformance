@@ -23,6 +23,7 @@ export const WINDOW_SECONDS = 60;
 export const SKEW_SECONDS = 30;
 
 import { createHash, createPublicKey, verify as verifySig, constants as cryptoConstants } from "node:crypto";
+import { compatible, isVersion } from "./discovery.mjs";
 
 // A request as the grader records it.
 //   { host, method, url, path, headers: {...}, body, at }   at = Unix seconds we saw it
@@ -603,18 +604,26 @@ export const CHECKS = [
     // endpoint that verifies the Session header (5.3) MUST also check `Poppy-Version`. It
     // rejects a request without it, or with a version that isn't compatible with one the
     // Company serves, with `version_unsupported`". Compatibility is defined in the same
-    // section: "Two versions are compatible when they have the same major version."
+    // section, and the whole sentence matters: "Two versions are compatible when they have the
+    // same major version and, before 1.0, the same minor version." This comment used to quote
+    // it truncated at "the same major version.", a sentence that appears nowhere in the
+    // specification, and the code did exactly what the truncation said.
     run(log, ctx) {
       const withHeader = sessionRequests(log).filter(x => x.r.isResource);
       if (!withHeader.length) return SKIP("no request to a resource endpoint carried a Session header");
-      const served = String(ctx?.protocolVersion ?? "1.0").split(".")[0];
+      // Every version this Company serves, not just the one it prefers. Defaulting to "1.0"
+      // when nothing was configured turned a gap in what this grader knows into a verdict about
+      // the agent, which is the one thing it must never do; it abstains as our limit instead.
+      const served = (ctx?.servedVersions ?? []).filter(isVersion);
+      if (!served.length)
+        return SKIP("this grader was not told which protocol versions this Company serves, so it cannot say whether a declared version is compatible with one", "grader");
       const bad = [], hits = [];
       for (const { r } of withHeader) {
         const v = r.headers?.["poppy-version"];
         if (v === undefined || v === "") { note(bad, hits, r, `${r.method} ${r.path}: no Poppy-Version`); continue; }
-        if (!/^\d+\.\d+$/.test(String(v))) { note(bad, hits, r, `${r.method} ${r.path}: ${JSON.stringify(v)} is not major.minor`); continue; }
-        if (String(v).split(".")[0] !== served)
-          note(bad, hits, r, `${r.method} ${r.path}: ${JSON.stringify(v)} is not compatible with ${served}.x, which this Company serves`);
+        if (!isVersion(v)) { note(bad, hits, r, `${r.method} ${r.path}: ${JSON.stringify(v)} is not major.minor`); continue; }
+        if (!served.some(s => compatible(v, s)))
+          note(bad, hits, r, `${r.method} ${r.path}: ${JSON.stringify(v)} is not compatible with ${served.join(", ")}, which this Company serves`);
       }
       return bad.length
         ? FAIL("a request with the Session header carried no compatible Poppy-Version", [...new Set(bad)].slice(0, 3), hits)

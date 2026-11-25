@@ -28,7 +28,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
 import { createRecorder, openRunFile, appendRecord, readRun, judge } from "./recorder.mjs";
-import { templatesOfOpenapi, identifierOf } from "./discovery.mjs";
+import { templatesOfOpenapi, contextOf } from "./discovery.mjs";
 import { renderHtml } from "./report.mjs";
 
 function graderCommit() {
@@ -83,10 +83,7 @@ async function record(configPath) {
     : [];
 
   const logPath = at(cfg.log);
-  const ctx = { identifier: identifierOf(discovery), domain: discovery?.organization?.domain,
-                protocolVersion: discovery?.protocol_version,
-                authDisabled: discovery?.auth?.disabled === true,
-                extensions: Object.keys(discovery?.extensions ?? {}) };
+  const ctx = contextOf(discovery);
   const file = openRunFile(logPath, { origin: cfg.origin, ctx, discovery, apiOperations,
                                       authServerEndpoints, graderCommit: graderCommit() });
 

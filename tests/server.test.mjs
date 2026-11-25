@@ -7,7 +7,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { connect } from "node:net";
 import { createGrader, validateConfig } from "../server.mjs";
-import { discoveryFor, identifierOf } from "../discovery.mjs";
+import { discoveryFor, identifierOf, contextOf } from "../discovery.mjs";
 
 const DISCOVERY = {
   protocol_version: "1.0",
@@ -27,8 +27,11 @@ async function withCompany(fn, over = {}) {
   const port = await g.listen(0);
   g.setOrigin(base(port));
   const d = g.config.discovery;
-  const ctx = { identifier: identifierOf(d), domain: d.organization.domain,
-                protocolVersion: d.protocol_version };
+  // Derived by the function production uses. Hand listing three fields meant this helper fell
+  // behind the real path the moment a context gained one: the served version set arrived, the
+  // live Company refused a request with no Poppy-Version exactly as 3.4 directs, and the verdict
+  // beside it abstained, so the invariant test below read as a disagreement in our own Company.
+  const ctx = contextOf(d);
   try { return await fn(g, port, ctx); } finally { await g.close(); }
 }
 
